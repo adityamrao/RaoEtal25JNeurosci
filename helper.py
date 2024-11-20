@@ -1,0 +1,525 @@
+# Basic
+import numpy as np
+import scipy
+import scipy.stats
+import os
+import itertools
+import warnings
+import sys
+from copy import deepcopy
+
+# Data Loading
+import cmlreaders as cml #Penn Computational Memory Lab's library of data loading functions
+
+# Data Handling
+import os
+from os import listdir as ld
+import os.path as op
+from os.path import join, exists as ex
+import time
+import datetime
+
+# Data Analysis
+import pandas as pd
+import xarray as xr
+
+# EEG & Signal Processing
+import ptsa
+from ptsa.data.readers import BaseEventReader, EEGReader, CMLEventReader, TalReader
+from ptsa.data.filters import MonopolarToBipolarMapper, MorletWaveletFilter
+from ptsa.data.timeseries import TimeSeries
+
+# Data Visualization
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Parallelization
+import cmldask.CMLDask as da
+from cmldask.CMLDask import new_dask_client_slurm as cl, get_exceptions as get_ex
+import cmldask
+
+# Custom
+from cstat import * #circular statistics
+from misc import * #helper functions for loading and saving data, and for other purposes
+from matrix_operations import * #matrix operations
+
+beh_to_event_windows = {'en': [250-1000, 1250+1000],
+                     'en_all': [250-1000, 1250+1000],
+                     'rm': [-1000, 0],
+                     'ri': [-1000, 0]}
+
+beh_to_epochs = {'en': np.arange(250, 1250, 200),
+              'en_all': np.arange(250, 1250, 200),
+              'rm': np.arange(-1000, 0, 200),
+              'ri': np.arange(-1000, 0, 200)}
+
+root_dir = '/scratch/amrao/retrieval_connectivity2'
+
+def load_events(dfrow, beh):
+    
+    evs_path = join(root_dir, beh, 'events', f'{ftag(dfrow)}_events.json')
+    evs_metadata_path = join(root_dir, beh, 'events', f'{ftag(dfrow)}_events_metadata.json')
+    if not ex(evs_path): return None
+    events = pd.read_json(evs_path)
+    events_metadata = pd.read_json(evs_metadata_path, typ='series')
+    events.attrs = events_metadata
+    events.attrs['mask'] = np.asarray(events.attrs['mask'])
+    
+    return events
+
+def get_eeg(dfrow, events, start, end):
+    
+    sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
+    sess_list_df = pd.read_json(join(root_dir, 'sess_list_df.json'))
+    sess_list_df.set_index(['sub', 'exp', 'sess', 'loc', 'mon'], inplace=True)
+    eeg_data_source = sess_list_df.loc[(sub, exp, sess, loc, mon), 'eeg_data_source']
+    
+    events['event_idx'] = np.arange(len(events))
+    events.sort_values(by=['mstime', 'eegoffset'], inplace=True)
+    events.attrs['mask'] = events.attrs['mask'][events['event_idx']]
+    events.drop('event_idx', axis=1, inplace=True)
+    
+    if eeg_data_source == 'cmlreaders':
+        reader = cml.CMLReader(subject=sub, 
+                               experiment=exp, 
+                               session=sess,
+                               localization=loc,
+                               montage=mon)
+        pairs = get_pairs(dfrow)
+        eeg = reader.load_eeg(events, start, end, scheme=pairs)
+        eeg = eeg.to_ptsa() 
+    elif eeg_data_source == 'ptsa':
+        eeg = get_ptsa_eeg(dfrow, events, start, end)
+        
+    sr = float(eeg.samplerate)
+    if 'sr' in events.attrs: 
+        assert events.attrs['sr'] == sr, 'sampling rate is wrong'
+        
+    dim_map = {}
+    if 'events' in eeg.dims: dim_map['events'] = 'event'
+    if 'channels' in eeg.dims: dim_map['channels'] = 'channel'
+    eeg = eeg.rename(dim_map)
+    eeg = eeg.transpose('event', 'channel', 'time')
+    
+    return eeg, events.attrs['mask']
+
+def get_ptsa_eeg(dfrow, events, start, end):
+    
+    sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
+    mon_ = '' if mon==0 else f'_{mon}' #for tal_reader path name
+
+    events = events.to_records()
+    tal_reader = TalReader(filename=f'/data/eeg/{sub}{mon_}/tal/{sub}{mon_}_talLocs_database_bipol.mat')
+    channels = tal_reader.get_monopolar_channels()
+    eeg = EEGReader(events=events, channels=channels,
+                start_time=start/1000, end_time=end/1000).read()
+
+    bipolar_pairs = tal_reader.get_bipolar_pairs()
+    pairs = get_pairs(dfrow)
+    pair_tuples_select = [tuple((int(pair[0]), int(pair[1]))) for pair in pairs[['contact_1', 'contact_2']].values]
+    bipolar_pairs = np.asarray([pair for pair in bipolar_pairs if tuple((int(pair[0]), int(pair[1]))) in pair_tuples_select], dtype=[('ch0', 'S3'), ('ch1', 'S3')]).view(np.recarray)
+    mapper= MonopolarToBipolarMapper(bipolar_pairs=bipolar_pairs)
+    eeg = mapper.filter(timeseries=eeg)
+
+    return eeg
+
+def get_beh_eeg(dfrow, events, save=True):
+
+    beh = events.attrs['beh']
+    start, end = beh_to_event_windows[beh]
+    
+    eeg, mask = get_eeg(dfrow, events, start, end)
+    if save: np.save(join(root_dir, beh, 'eeg', f'{ftag(dfrow)}_raw_eeg.npy'), eeg.data)
+    
+    if beh in ['rm', 'ri']: eeg = mirror_buffer(eeg, 1000)
+    eeg = eeg.resampled(250)
+    eeg = notch_filter(eeg, dfrow['sub'])
+
+    return eeg, mask
+
+def notch_filter(eeg, sub):
+    
+    filter_freqs = [48., 52.] if 'FR' in sub else [58., 62.]
+    
+    from ptsa.data.filters import ButterworthFilter
+    b_filter = ButterworthFilter(freq_range=filter_freqs, filt_type='stop', order=4)
+    eeg = b_filter.filter(timeseries=eeg)
+
+    return eeg
+
+def mirror_buffer(eeg, buffer_length, axis=-1):
+    
+    sr = float(eeg.samplerate)
+    tmpt_length = int(buffer_length * (1/1000) * sr)
+    coords=eeg.coords
+    coords['time'] = coords['time'][..., tmpt_length::-1]
+    buffer = TimeSeries(data=eeg[..., tmpt_length::-1], dims=eeg.dims, coords=coords)
+    buffered_eeg = xr.concat([buffer, eeg, buffer], dim='time')
+    
+    return buffered_eeg
+
+def get_pairs(dfrow):
+    
+    path = join(root_dir, 'electrode_information', 'pairs', f'{ftag(dfrow)}_pairs.json')
+    if ex(path): return pd.read_json(path).fillna('nan')
+    else: return None
+
+def get_localization(dfrow):
+    
+    path = join(root_dir, 'electrode_information', 'localization', f'{ftag(dfrow)}_localization.json')
+    if ex(path): localization = pd.read_json(path).fillna('nan')
+    else: return []
+    localization['level_1'] = localization.apply(lambda r: tuple(r['level_1']) if isinstance(r['level_1'], list) else r['level_1'], axis=1)
+    localization = localization.set_index(['level_0', 'level_1']).rename_axis([None, None], axis='index')
+    
+    return localization
+
+def get_sr(dfrow):
+    
+    sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
+    sess_list_df = pd.read_json(join(root_dir, 'sess_list_df_data_check.json'))
+    sess_list_df.set_index(['sub', 'exp', 'sess', 'loc', 'mon'], inplace=True)
+    sr = sess_list_df.loc[(sub, exp, sess, loc, mon), 'sr']
+    
+    return sr
+
+def find_overlapping_pairs(pairs):
+
+    overlapping_pairs = []
+    for elec1 in np.arange(len(pairs)):
+        for elec2 in np.arange(len(pairs)):
+
+            electrode_pair1 = pairs.iloc[elec1]
+            electrode_pair2 = pairs.iloc[elec2]
+
+            this_pair_channels = [electrode_pair1['contact_1'], electrode_pair1['contact_2'], electrode_pair2['contact_1'], electrode_pair2['contact_2']]
+
+            if len(np.unique(this_pair_channels)) < 4:
+                overlapping_pairs.append((elec1, elec2))
+
+    return overlapping_pairs
+
+def get_region_information(key=None):
+    
+    region_translator = pd.read_csv('region_translator.csv', na_filter=False).set_index('atlas_label')
+    original_labels = np.unique(region_translator.index)
+    unique_region_names = np.sort(region_translator.query('region != "nan"')['region'].unique())
+    region_labels = np.char.add(np.repeat(['L ', 'R '], len(unique_region_names)).astype(str), np.tile(unique_region_names, 2).astype(str))
+    
+    region_lists = pd.Series({'region_translator': region_translator,
+                              'original_labels': original_labels,
+                              'unique_region_names': unique_region_names,
+                              'region_labels': region_labels})
+    
+    return region_lists[key] if key is not None else region_lists
+
+def get_atlas_labels(pairs, localization): 
+    
+    if len(localization) > 0: 
+
+        localization = localization.loc['pairs'].reset_index()
+        localization['label'] = localization.apply(lambda r: r['index'][0] + '-' + r['index'][1], axis=1)
+        localization.set_index('label', inplace=True)
+        for col in ['atlases.mtl', 'atlases.dk', 'atlases.whole_brain']:
+            pairs[col] = pairs.apply(lambda pair: localization.loc[pair['label'], col] if ((col in localization.columns) & (pair['label'] in localization.index)) else np.nan, axis=1)
+
+    atlases = pd.DataFrame([(col, iCol) for iCol, col in enumerate(['stein.region', 'das.region', 'atlases.mtl', 'atlases.whole_brain', 'wb.region', 'mni.region', 'atlases.dk', 'dk.region', 'ind.corrected.region', 'mat.ind.corrected.region', 'ind.snap.region', 'mat.ind.snap.region', 'ind.dural.region', 'mat.ind.dural.region', 'ind.region', 'mat.ind.region', 'avg.corrected.region', 'avg.mat.corrected.region', 'avg.snap.region', 'avg.mat.snap.region', 'avg.dural.region', 'avg.mat.dural.region', 'avg.region', 'avg.mat.region', 'mat.tal.region'])], columns=['atlas', 'priority']).query('atlas in @pairs.columns').sort_values(by='priority', ascending=True, axis=0)['atlas'].values
+    
+    def label_pair(pair):
+        
+        for atlas in atlases:
+            test_region = str(pair[atlas])
+            if (atlas in ['tal.region', 'mat.tal.region']) and np.any([test_region in label for label in ['Parahippocampal Gyrus', 'Uncus', 'Lentiform Nucleus', 'Caudate', 'Thalamus']]):
+                continue
+            if test_region.lower() not in ['nan', '[nan]', 'none', 'unknown', 'misc', '', ' ', 'left tc', '*']:
+                return test_region, atlas
+        return 'nan', 'no atlas'
+    
+    pairs[['atlas_label', 'atlas']] = pairs.apply(lambda pair: label_pair(pair), axis=1, result_type='expand')
+    return pairs.rename({'label': 'pair_label'}, axis=1)[['pair_label', 'atlas_label', 'atlas']]
+
+def regionalize_electrodes(pairs, localization):
+
+    regionalizations = get_atlas_labels(pairs, localization)
+    region_translator = get_region_information('region_translator')
+    original_labels = get_region_information('original_labels')
+    regionalizations['region'] = regionalizations.apply(lambda r: region_translator.loc[r['atlas_label'], 'region'] if r['atlas_label'] in original_labels else 'nan', axis=1)    
+
+    def get_hemisphere_region_label(r):
+        
+        if 'hemisphere' in pairs.columns: 
+            hemisphere = pairs.loc[r.name, 'hemisphere']
+            if hemisphere in ['L', 'R']: return hemisphere
+        
+        if r['atlas_label'] in original_labels:
+            hemisphere = region_translator.loc[r['atlas_label'], 'hemisphere']
+            if hemisphere in ['L', 'R']: return hemisphere
+        
+        atlases_x = pd.DataFrame([(col, iCol) for iCol, col in enumerate(['mni.x','ind.corrected.x', 'ind.snap.x', 'ind.dural.x', 'ind.x', 'avg.corrected.x', 'avg.snap.x', 'avg.dural.x', 'avg.x', 'tal.x', 'x'])], columns=['atlas', 'priority']).query('atlas in @pairs.columns').sort_values(by='priority', ascending=True, axis=0)['atlas'].values
+        
+        for atlas_x in atlases_x:
+            x_coord = pairs.loc[r.name, atlas_x]
+            if not isinstance(x_coord, (int, float)): continue
+            if x_coord < 0: return 'L'
+            elif x_coord > 0: return 'R'
+        
+    regionalizations['hemisphere'] = regionalizations.apply(lambda r: get_hemisphere_region_label(r), axis=1)
+    return (regionalizations['hemisphere'] + ' ' + regionalizations['region']).values
+
+def exclude_regionalizations(dfrow, pairs, regionalizations):
+    
+    missing_channels = None
+    
+    if tuple(dfrow) in [('R1394E', 'FR1', 0, 0, 0)]:
+        missing_channels = ['3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
+    
+    if tuple(dfrow) in [('R1394E', 'FR1', 1, 1, 1),
+                        ('R1394E', 'catFR1', 1, 1, 1), 
+                        ('R1394E', 'catFR1', 2, 1, 1)]:
+        missing_channels = ['35Ld2-35Ld3', '35Ld4-35Ld5', '35Ld6-35Ld7', '35Ld8-35Ld9', '3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
+        
+    if tuple(dfrow) in  [('R1354E', 'FR1', 0, 0, 0),
+                         ('R1354E', 'FR1', 1, 0, 0),
+                         ('R1354E', 'catFR1', 0, 0, 0),
+                         ('R1354E', 'catFR1', 1, 0, 0),
+                         ('R1354E', 'catFR1', 2, 0, 0),
+                         ('R1354E', 'catFR1', 3, 0, 0)]:
+        missing_channels = '5Ldm1-5Ldm2', '5Ldm2-5Ldm3', '5Ldm3-5Ldm4', '5Ldm4-5Ldm5', '5Ldm5-5Ldm6', '5Ldm6-5Ldm7', '5Ldm7-5Ldm8', '5Ldm8-5Ldm9', '5Ldm9-5Ldm1', '25Ldm1-25Ldm2', '25Ldm2-25Ldm3', '25Ldm3-25Ldm4', '25Ldm4-25Ldm5', '25Ldm5-25Ldm6', '25Ldm6-25Ldm7', '25Ldm7-25Ldm8', '25Ldm8-25Ldm9', '25Ldm9-25Ldm1'
+    
+    if missing_channels is not None:
+        regionalizations = regionalizations[np.asarray([idx for idx in np.arange(len(pairs)) 
+                                                    if pairs.iloc[idx]['label'] not in missing_channels])]
+    return regionalizations
+
+def timebin_phase_timeseries(timeseries, sr): return timebin_timeseries(timeseries, sr, circ_mean)
+    
+def timebin_power_timeseries(timeseries, sr): return timebin_timeseries(timeseries, sr, np.mean)
+
+def timebin_timeseries(timeseries, sr, average_function):
+    
+    bin_size = int(sr * (1/1000) * 200)
+    bin_count = int(np.round(timeseries.shape[-1] / bin_size))
+    
+    timebinned_timeseries = []
+    for iBin in range(bin_count):
+        left_edge = iBin*bin_size
+        right_edge = (iBin+1)*bin_size if iBin < bin_count - 1 else None
+        this_epoch = average_function(timeseries[..., left_edge:right_edge], axis=-1)
+        timebinned_timeseries.append(this_epoch)
+
+    timebinned_timeseries = np.asarray(timebinned_timeseries)
+    timebinned_timeseries = np.moveaxis(timebinned_timeseries, 0, -1)
+    
+    return timebinned_timeseries
+
+def clip_buffer(timeseries, buffer_length):
+    
+    return timeseries.isel(time=np.arange(buffer_length, len(timeseries['time'])-buffer_length))
+
+def get_phase(eeg, freqs):
+    
+    wavelet_filter = MorletWaveletFilter(freqs=freqs, width=5, output='phase', complete=True)
+    phase = wavelet_filter.filter(timeseries=eeg)
+    phase = phase.transpose('event', 'channel', 'frequency', 'time')
+    
+    return phase 
+
+def process_phase(dfrow, events, freqs):
+    
+    eeg, mask = get_beh_eeg(dfrow, events)
+    phase = get_phase(eeg, freqs)
+    
+    sr = float(eeg.samplerate)
+    buffer_length = int(sr/1000*1000)
+    phase = clip_buffer(phase, buffer_length)
+    
+    return phase, mask, sr
+
+def get_power(eeg, freqs):
+    
+    wavelet_filter = MorletWaveletFilter(freqs=freqs, width=5, output='power', complete=True)
+    power = wavelet_filter.filter(timeseries=eeg)
+    power = power.transpose('event', 'channel', 'frequency', 'time')
+    
+    power = np.log10(power)
+    
+    sr = float(eeg.samplerate)
+    buffer_length = int(sr/1000*1000)
+    power = clip_buffer(power, buffer_length)
+    
+    mean = power.mean('time').mean('event')
+    std = power.mean('time').std('event')
+    power = (power-mean)/std 
+    
+    return power
+
+def process_power(dfrow, events, freqs):
+    
+    eeg, mask = get_beh_eeg(dfrow, events)
+    sr = float(eeg.samplerate)
+    power = get_power(eeg, freqs)
+    
+    power = timebin_power_timeseries(power.data, sr)
+    
+    return power, mask
+
+def get_elsymx(dfrow, freqs, events):
+    
+    overlapping_pairs = find_overlapping_pairs(get_pairs(dfrow))
+    
+    phase, mask, sr = process_phase(dfrow, events, freqs) #get phase timeseries and successful/unsuccessful memory event mask
+
+    electrode_count, freq_count, epoch_count = phase.shape[1], len(freqs), 5
+    elsymx = np.full((electrode_count, electrode_count, freq_count, epoch_count, 2), np.nan)
+        
+    for iElec in np.arange(electrode_count):
+        for jElec in np.arange(electrode_count):
+            
+            if (jElec > iElec) or ((iElec, jElec) in overlapping_pairs): continue #phase-locking is symmetric in signals
+                
+            diff = (phase.isel(channel = jElec) - phase.isel(channel = iElec)).data
+
+            diff = timebin_phase_timeseries(diff, sr) #average phase differences in 200 ms timebins
+
+            elsymx[iElec, jElec, ..., 0] = ppc(diff[mask, ...])
+            elsymx[iElec, jElec, ..., 1] = ppc(diff[~mask, ...])
+    
+    elsymx = symmetrize(elsymx)
+    return elsymx
+
+def add_regions_elsymx(elsymx, regionalizations, freqs, beh):
+    
+    elsymx_regs = xr.DataArray(elsymx, 
+                               dims=['reg1', 'reg2', 'freq', 'epoch', 'success'],
+                               coords={'reg1': (['reg1'], regionalizations), 
+                                       'reg2': (['reg2'], regionalizations),
+                                       'freq': (['freq'], freqs), 
+                                       'epoch': (['epoch'], beh_to_epochs[beh]),
+                                       'success': (['success'], [True, False])})
+    
+    return elsymx_regs
+
+def regionalize_electrode_connectivities(elsymx):
+    
+    shape = np.array(elsymx.shape)
+    region_labels = get_region_information('region_labels')
+    shape[0] = shape[1] = len(region_labels)
+    
+    regsymx = np.full(shape, np.nan)
+                               
+    for iRegion, region1 in enumerate(region_labels):
+        if region1 not in elsymx.reg1.values: continue
+        
+        for jRegion, region2 in enumerate(region_labels):
+            if region2 not in elsymx.reg2.values: continue
+            
+            elsymx_sel = elsymx.sel(reg1 = region1, reg2 = region2)
+            regsymx[iRegion, jRegion, ...] = elsymx_sel.mean([x for x in elsymx_sel.dims if x not in ['freq', 'epoch', 'success']]).values
+        
+    dims = list(elsymx.dims)
+    coords = {}
+    coords['reg1'] = coords['reg2'] = region_labels
+    for dim in np.setdiff1d(dims, ['reg1', 'reg2']):
+        coords[dim] = tuple(([dim], elsymx.coords[dim].values))
+    regsymx = xr.DataArray(regsymx, 
+                           dims=dims, 
+                           coords=coords)
+
+    return regsymx 
+
+def run_pipeline(dfrow, beh, events, save_dir):
+    
+    freqs = np.arange(3, 9)
+    if ex(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc')): return
+    
+    elsymx = get_elsymx(dfrow, freqs, events)
+    np.save(join(save_dir, 'elsymxs', f'{ftag(dfrow)}_elsymx.npy'), elsymx)
+    
+    pairs = get_pairs(dfrow)
+    localization = get_localization(dfrow)
+    regionalizations = regionalize_electrodes(pairs, localization)
+    regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
+     
+    elsymx_regs = add_regions_elsymx(elsymx, regionalizations, freqs, beh)
+    regsymx = regionalize_electrode_connectivities(elsymx_regs)
+    regsymx.to_netcdf(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc'))
+    
+def cohens_d(x, y):
+    
+    s = np.sqrt(((len(x)-1)*(np.std(x, axis=0, ddof=1)**2) + (len(y)-1)*(np.std(y, axis=0, ddof=1)**2))/(len(x)+len(y)-2))
+    d = (np.mean(x, axis=0) - np.mean(y, axis=0))/s
+    return d
+
+def welchs_t(x, y): 
+    
+    return scipy.stats.ttest_ind(x, y, axis=0, equal_var=False).statistic
+
+def comp_elpomx(dfrow, freqs, events):
+    
+    power, mask = process_power(dfrow, events, freqs)
+    
+    elpomx = pd.Series({})
+    elpomx['t'] = welchs_t(power[mask, ...], power[~mask, ...])
+    elpomx['d'] = cohens_d(power[mask, ...], power[~mask, ...])
+    
+    return elpomx
+
+def add_regions_elpomx(elpomx, regionalizations, freqs, beh):
+    
+    elpomx_regs = pd.Series({})
+    elpomx_regs = xr.DataArray(elpomx, 
+                               dims=['reg1', 'freq', 'epoch'], 
+                               coords={'reg1': (['reg1'], regionalizations), 
+                                       'freq': (['freq'], freqs),
+                                       'epoch': (['epoch'], beh_to_epochs[beh])})
+    
+    return elpomx_regs
+
+def regionalize_electrode_powers(elpomx):
+    
+    shape = np.array(elpomx.shape)
+    region_labels = get_region_information('region_labels')
+    shape[0] = len(region_labels)
+    
+    regpomx = np.full(shape, np.nan)
+                               
+    for iRegion, region1 in enumerate(region_labels):
+        if region1 not in elpomx.reg1.values: continue
+            
+        elpomx_sel = elpomx.sel(reg1 = region1)
+        regpomx[iRegion, ...] = elpomx_sel.mean([x for x in elpomx_sel.dims if x not in ['freq', 'epoch', 'success']]).values
+        
+    dims = list(elpomx.dims)
+    coords = {}
+    coords['reg1'] = region_labels
+    for dim in np.setdiff1d(dims, 'reg1'):
+        coords[dim] = tuple(([dim], elpomx.coords[dim].values))
+    regpomx = xr.DataArray(regpomx, 
+                           dims=dims, 
+                           coords=coords)
+            
+    return regpomx 
+
+def run_pipeline_power(dfrow, band_name, beh, events, save_dir):
+    
+    # if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.nc')): return
+
+    band_name_to_freqs = {'theta': np.arange(3, 9),
+                          'gamma': np.arange(45, 100, 5)}
+    freqs = band_name_to_freqs[band_name]
+
+    elpomx = comp_elpomx(dfrow, freqs, events)
+
+    pairs = get_pairs(dfrow)
+    localization = get_localization(dfrow)
+    regionalizations = regionalize_electrodes(pairs, localization)
+    regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
+    
+    regpomx = pd.Series({})
+    for k in ['t', 'd']: 
+        elpomx_regs = add_regions_elpomx(elpomx[k], regionalizations, freqs, beh)
+        regpomx[k] = regionalize_electrode_powers(elpomx_regs)
+
+        np.save(join(save_dir, 'elpomxs', band_name, f'{ftag(dfrow)}_elpomx{k}.npy'), elpomx[k])
+        regpomx[k].to_netcdf(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx{k}.nc'))
