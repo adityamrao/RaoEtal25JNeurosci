@@ -50,3 +50,44 @@ def ppc(phase):
     distance_sum = np.sum(distance_sum, axis=0)
     
     return (2/(n*(n-1)))*distance_sum
+
+def plv(phase): # This implementation of the PLV takes advantage of the equality PLV = e^(-s^2/2), where s is the circular standard deviation
+    
+    circ_std = scipy.stats.circstd(phase)
+    plv = np.e**((-circ_std**2)/2)
+    return plv
+
+def plv_to_kappa(R):
+    
+    np.random.seed(202410)
+    from scipy.special import iv
+        
+    close = False
+    rtol, atol = 1e-10, 1e-10
+    kappa = np.random.random()
+    
+    while not close:
+        
+        A = iv(1, kappa)/iv(0, kappa)
+        close = np.isclose(A, R, rtol=rtol, atol=atol)
+        if not close: kappa *= R/A
+        
+    return kappa
+
+def wrapped_normal_first_moment(mu, sigma):
+    return np.exp(1j*mu - sigma**2 / 2)
+
+def wrapped_normal_sigma_to_plv(sigma):
+    return wrapped_normal_first_moment(0, sigma)
+
+def wrapped_normal_sigma_to_ppc(sigma):
+    return wrapped_normal_first_moment(0, sigma) ** 2
+
+def plv_to_wrapped_normal_sigma(plv):
+    return np.sqrt(-2 * np.log(plv))
+
+def ppc_to_wrapped_normal_sigma(ppc):
+    return np.sqrt(-np.log(ppc))
+
+def sample_wrapped_multivariate_normal(mean, cov, size, **args):
+    return np.random.multivariate_normal(mean=mean + np.pi, cov=cov, size=size, **args) % (2 * np.pi) - np.pi

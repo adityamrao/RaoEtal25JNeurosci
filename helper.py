@@ -10,6 +10,7 @@ from copy import deepcopy
 
 # Data Loading
 import cmlreaders as cml #Penn Computational Memory Lab's library of data loading functions
+from cmlreaders.eeg_container import EEGContainer
 
 # Data Handling
 import os
@@ -36,13 +37,17 @@ import seaborn as sns
 
 # Parallelization
 import cmldask.CMLDask as da
-from cmldask.CMLDask import new_dask_client_slurm as cl, get_exceptions as get_ex
+from cmldask.CMLDask import new_dask_client_slurm as cl
 import cmldask
+from cluster import get_exceptions_quiet as get_ex
 
 # Custom
 from cstat import * #circular statistics
 from misc import * #helper functions for loading and saving data, and for other purposes
 from matrix_operations import * #matrix operations
+import os
+from simulate_eeg import AVAILABLE_SIMULATIONS, simulation_parameters, sample_eeg
+
 
 beh_to_event_windows = {'en': [250-1000, 1250+1000],
                      'en_all': [250-1000, 1250+1000],
@@ -54,7 +59,9 @@ beh_to_epochs = {'en': np.arange(250, 1250, 200),
               'rm': np.arange(-1000, 0, 200),
               'ri': np.arange(-1000, 0, 200)}
 
-root_dir = '/scratch/amrao/retrieval_connectivity2'
+# root_dir set in main analysis notebook
+def print_root_dir():
+    print(root_dir)
 
 def load_events(dfrow, beh):
     
@@ -68,7 +75,7 @@ def load_events(dfrow, beh):
     
     return events
 
-def get_eeg(dfrow, events, start, end):
+def get_eeg(dfrow, events, start, end, simulation_tag=None):
     
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
     sess_list_df = pd.read_json(join(root_dir, 'sess_list_df.json'))
@@ -88,6 +95,11 @@ def get_eeg(dfrow, events, start, end):
                                montage=mon)
         pairs = get_pairs(dfrow)
         eeg = reader.load_eeg(events, start, end, scheme=pairs)
+        
+        if simulation_tag not in ['standard', '', None]:
+            # replace experimentally recorded EEG with simulated EEG to validate analysis pipeline
+            eeg = replace_w_simulated_EEG(eeg, dfrow, scheme=pairs, simulation_tag=simulation_tag)
+        
         eeg = eeg.to_ptsa() 
     elif eeg_data_source == 'ptsa':
         eeg = get_ptsa_eeg(dfrow, events, start, end)
@@ -124,12 +136,12 @@ def get_ptsa_eeg(dfrow, events, start, end):
 
     return eeg
 
-def get_beh_eeg(dfrow, events, save=True):
+def get_beh_eeg(dfrow, events, save=True, simulation_tag=None):
 
     beh = events.attrs['beh']
     start, end = beh_to_event_windows[beh]
     
-    eeg, mask = get_eeg(dfrow, events, start, end)
+    eeg, mask = get_eeg(dfrow, events, start, end, simulation_tag=simulation_tag)
     if save: np.save(join(root_dir, beh, 'eeg', f'{ftag(dfrow)}_raw_eeg.npy'), eeg.data)
     
     if beh in ['rm', 'ri']: eeg = mirror_buffer(eeg, 1000)
@@ -325,15 +337,14 @@ def get_phase(eeg, freqs):
     
     return phase 
 
-def process_phase(dfrow, events, freqs):
+def process_phase(dfrow, events, freqs, simulation_tag=None):
     
-    eeg, mask = get_beh_eeg(dfrow, events)
+    eeg, mask = get_beh_eeg(dfrow, events, simulation_tag=simulation_tag)
     phase = get_phase(eeg, freqs)
     
     sr = float(eeg.samplerate)
     buffer_length = int(sr/1000*1000)
     phase = clip_buffer(phase, buffer_length)
-    
     return phase, mask, sr
 
 def get_power(eeg, freqs):
@@ -354,9 +365,9 @@ def get_power(eeg, freqs):
     
     return power
 
-def process_power(dfrow, events, freqs):
+def process_power(dfrow, events, freqs, simulation_tag=None):
     
-    eeg, mask = get_beh_eeg(dfrow, events)
+    eeg, mask = get_beh_eeg(dfrow, events, simulation_tag=simulation_tag)
     sr = float(eeg.samplerate)
     power = get_power(eeg, freqs)
     
@@ -364,11 +375,11 @@ def process_power(dfrow, events, freqs):
     
     return power, mask
 
-def get_elsymx(dfrow, freqs, events):
+def get_elsymx(dfrow, freqs, events, simulation_tag=None):
     
     overlapping_pairs = find_overlapping_pairs(get_pairs(dfrow))
     
-    phase, mask, sr = process_phase(dfrow, events, freqs) #get phase timeseries and successful/unsuccessful memory event mask
+    phase, mask, sr = process_phase(dfrow, events, freqs, simulation_tag=simulation_tag) #get phase timeseries and successful/unsuccessful memory event mask
 
     electrode_count, freq_count, epoch_count = phase.shape[1], len(freqs), 5
     elsymx = np.full((electrode_count, electrode_count, freq_count, epoch_count, 2), np.nan)
@@ -376,7 +387,8 @@ def get_elsymx(dfrow, freqs, events):
     for iElec in np.arange(electrode_count):
         for jElec in np.arange(electrode_count):
             
-            if (jElec > iElec) or ((iElec, jElec) in overlapping_pairs): continue #phase-locking is symmetric in signals
+            if (jElec > iElec) or ((iElec, jElec) in overlapping_pairs):
+                continue #phase-locking is symmetric in signals
                 
             diff = (phase.isel(channel = jElec) - phase.isel(channel = iElec)).data
 
@@ -428,12 +440,12 @@ def regionalize_electrode_connectivities(elsymx):
 
     return regsymx 
 
-def run_pipeline(dfrow, beh, events, save_dir):
+def run_pipeline(dfrow, beh, events, save_dir, simulation_tag=None):
     
     freqs = np.arange(3, 9)
     if ex(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc')): return
     
-    elsymx = get_elsymx(dfrow, freqs, events)
+    elsymx = get_elsymx(dfrow, freqs, events, simulation_tag=simulation_tag)
     np.save(join(save_dir, 'elsymxs', f'{ftag(dfrow)}_elsymx.npy'), elsymx)
     
     pairs = get_pairs(dfrow)
@@ -444,6 +456,7 @@ def run_pipeline(dfrow, beh, events, save_dir):
     elsymx_regs = add_regions_elsymx(elsymx, regionalizations, freqs, beh)
     regsymx = regionalize_electrode_connectivities(elsymx_regs)
     regsymx.to_netcdf(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc'))
+    return regsymx
     
 def cohens_d(x, y):
     
@@ -455,9 +468,9 @@ def welchs_t(x, y):
     
     return scipy.stats.ttest_ind(x, y, axis=0, equal_var=False).statistic
 
-def comp_elpomx(dfrow, freqs, events):
+def comp_elpomx(dfrow, freqs, events, simulation_tag=None):
     
-    power, mask = process_power(dfrow, events, freqs)
+    power, mask = process_power(dfrow, events, freqs, simulation_tag=simulation_tag)
     
     elpomx = pd.Series({})
     elpomx['t'] = welchs_t(power[mask, ...], power[~mask, ...])
@@ -501,15 +514,15 @@ def regionalize_electrode_powers(elpomx):
             
     return regpomx 
 
-def run_pipeline_power(dfrow, band_name, beh, events, save_dir):
+def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=None):
     
-    # if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.nc')): return
+    if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.nc')): return
 
     band_name_to_freqs = {'theta': np.arange(3, 9),
                           'gamma': np.arange(45, 100, 5)}
     freqs = band_name_to_freqs[band_name]
 
-    elpomx = comp_elpomx(dfrow, freqs, events)
+    elpomx = comp_elpomx(dfrow, freqs, events, simulation_tag=simulation_tag)
 
     pairs = get_pairs(dfrow)
     localization = get_localization(dfrow)
@@ -523,3 +536,89 @@ def run_pipeline_power(dfrow, band_name, beh, events, save_dir):
 
         np.save(join(save_dir, 'elpomxs', band_name, f'{ftag(dfrow)}_elpomx{k}.npy'), elpomx[k])
         regpomx[k].to_netcdf(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx{k}.nc'))
+
+
+def replace_w_simulated_EEG(original_eeg,
+                            dfrow,
+                            scheme=None,
+                            simulation_tag=None,
+                            random_state=None,
+                            random_state_type='offset_from_eeg_hash',
+                            verbose=False):
+    assert isinstance(original_eeg, EEGContainer)
+    assert simulation_tag in AVAILABLE_SIMULATIONS
+    
+    if random_state_type == 'offset_from_eeg_hash':
+        # fix random state to hash of original EEG
+        # ensures unique, reproducible random states for each unique input EEG recording
+        eeg_hash = hash(str(original_eeg.data))
+        random_state = eeg_hash if random_state is None else eeg_hash + random_state
+        random_state %= 2**32 - 1
+    elif random_state_type == 'standard':
+        pass
+    else:
+        raise ValueError
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    if simulation_tag in ['standard', '', None]:
+        return original_eeg
+    eeg = deepcopy(original_eeg)
+    
+    parameters = simulation_parameters[simulation_tag]
+    
+    wavelet_amplitude = parameters['wavelet_amplitude']
+    get_phase_covariance = parameters['phase_covariance_function']
+    if get_phase_covariance == 'within_region_group':
+        assert scheme is not None
+        localization = get_localization(dfrow)
+        regionalizations = regionalize_electrodes(scheme, localization)
+        regionalizations = exclude_regionalizations(dfrow, scheme, regionalizations)
+        assert (pd.Series(regionalizations).str.startswith('L ') | pd.Series(regionalizations).str.startswith('R ')).all()
+        # use hemispheres for simple regional grouping
+        region_groups = ['Left' if left else 'Right' for left in pd.Series(regionalizations).str.startswith('L ')]
+        
+        from simulate_eeg import get_block_diagonal_ppc_matrix, ppc_matrix_to_wrapped_normal_covariance
+
+        ppc_matrix = get_block_diagonal_ppc_matrix(n_channels=None,
+                                                   n_regions=None,
+                                                   n_region_groups=None,
+                                                   regions=list(regionalizations),
+                                                   region_groups=list(region_groups),
+                                                   global_ppc=parameters['global_ppc'],
+                                                   within_group_ppc=parameters['within_group_ppc'],
+                                                   within_region_ppc=parameters['within_region_ppc'],
+                                                   verbose=verbose,
+                                                  )
+        cov = ppc_matrix_to_wrapped_normal_covariance(ppc_matrix)
+        
+        # cov = get_phase_covariance()
+    elif get_phase_covariance is None:
+        cov = None
+    else:
+        raise NotImplementedError(f'Phase covariance method {get_phase_covariance} is not implemented!')
+    oscillation_frequency = parameters['oscillation_frequency']
+    morlet_reps = parameters['morlet_reps']
+    
+    pinknoise_amplitude = parameters['pinknoise_amplitude']
+    pinknoise_exponent = parameters['pinknoise_exponent']
+    
+    start_time_ms = original_eeg.time.min()
+    duration_ms = original_eeg.time.max() - start_time_ms
+    
+    simulated_eeg = sample_eeg(n_events=len(eeg.events),
+                               n_channels=len(eeg.channels),
+                               sample_rate_Hz=eeg.samplerate,
+                               start_time_ms=start_time_ms,
+                               duration_ms=duration_ms,
+                               connectivity_frequency_Hz=oscillation_frequency,
+                               morlet_reps=morlet_reps,
+                               wavelet_amplitude=wavelet_amplitude,
+                               phase_mean=np.zeros(len(cov)) if cov is not None else None,
+                               phase_covariance=cov,
+                               pinknoise_amplitude=pinknoise_amplitude,
+                               pinknoise_exponent=pinknoise_exponent,
+    )
+    eeg.data = simulated_eeg.values
+    eeg.time = simulated_eeg.time
+    return eeg

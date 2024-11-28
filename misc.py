@@ -148,3 +148,23 @@ def jzs_bayes_factor(t, N):
     denominator = integral(integrand, 0, np.inf)[0]                                                        
     B = numerator/denominator
     return B
+
+def duration_to_samples(duration_s, sample_rate_Hz):
+    return int(duration_s * sample_rate_Hz) + 1
+
+def get_time_offset(phase_offset, frequency):
+    return phase_offset / (2 * np.pi * frequency)
+
+
+def get_username_from_working_directory(index=2):
+  """Extracts the username from the current working directory."""
+  try:
+    working_directory = os.getcwd()
+    path_parts = working_directory.split(os.sep)
+    # Assuming the username is in a fixed position, extract it. 
+    # For example, if the path is /home/user/some/directory, 
+    # then the username is at index 2.
+    username = path_parts[index]
+    return username
+  except IndexError:
+    raise ValueError("Unable to extract username from working directory.")
