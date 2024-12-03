@@ -11,14 +11,6 @@ from misc import duration_to_samples, get_time_offset
 from wavelet import Wavelet
 
 
-AVAILABLE_SIMULATIONS = [
-            'standard', '', None,  # use empirical EEG (no simulation)
-            'null_connectivity',  # no functional connectivity (FC) with EEG simulated with pink noise
-            'strong_oscillation_only',  # idealized FC with noiseless wavelet oscillations giving non-physiologically strong FC
-            'oscillation_only',  # idealized FC with noiseless wavelet oscillations having realistic FC
-            'noisy_oscillation',  # wavelet oscillations plus additive pink noise
-]
-
 simulation_parameters = {
             # use empirical EEG (no simulation)
             'standard': None,
@@ -33,13 +25,30 @@ simulation_parameters = {
                 'pinknoise_amplitude': 100,
                 'pinknoise_exponent': 1,
             },
+            'equal_oscillation_null': {
+                'wavelet_amplitude': 100,
+                'phase_covariance_function': 'within_region_group',
+                'global_ppc0': 0.01,
+                'within_group_ppc0': 0.1,
+                'within_region_ppc0': 0.3,
+                'global_ppc1': 0.01,
+                'within_group_ppc1': 0.1,
+                'within_region_ppc1': 0.3,
+                'oscillation_frequency': 5,  # Hz
+                'morlet_reps': 5,
+                'pinknoise_amplitude': 0,
+                'pinknoise_exponent': 1,
+            },
             # idealized FC with noiseless wavelet oscillations giving non-physiologically strong FC
             'strong_oscillation_only': {
                 'wavelet_amplitude': 100,
                 'phase_covariance_function': 'within_region_group',
-                'global_ppc': 0.05,
-                'within_group_ppc': 0.2,
-                'within_region_ppc': 0.4,
+                'global_ppc0': 0.01,
+                'within_group_ppc0': 0.1,
+                'within_region_ppc0': 0.3,
+                'global_ppc1': 0.05,
+                'within_group_ppc1': 0.2,
+                'within_region_ppc1': 0.5,
                 'oscillation_frequency': 5,  # Hz
                 'morlet_reps': 5,
                 'pinknoise_amplitude': 0,
@@ -49,9 +58,12 @@ simulation_parameters = {
             'oscillation_only': {
                 'wavelet_amplitude': 100,
                 'phase_covariance_function': 'within_region_group',
-                'global_ppc': 0.0001,
-                'within_group_ppc': 0.01,
-                'within_region_ppc': 0.02,
+                'global_ppc0': 0.0005,
+                'within_group_ppc0': 0.001,
+                'within_region_ppc0': 0.005,
+                'global_ppc1': 0.001,
+                'within_group_ppc1': 0.0015,
+                'within_region_ppc1': 0.01,
                 'oscillation_frequency': 5,  # Hz
                 'morlet_reps': 5,
                 'pinknoise_amplitude': 0,
@@ -61,15 +73,28 @@ simulation_parameters = {
             'noisy_oscillation': {
                 'wavelet_amplitude': 100,
                 'phase_covariance_function': 'within_region_group',
-                'global_ppc': 0.0001,
-                'within_group_ppc': 0.01,
-                'within_region_ppc': 0.02,
+                'global_ppc0': 0.0005,
+                'within_group_ppc0': 0.001,
+                'within_region_ppc0': 0.005,
+                'global_ppc1': 0.001,
+                'within_group_ppc1': 0.0015,
+                'within_region_ppc1': 0.01,
                 'oscillation_frequency': 5,  # Hz
                 'morlet_reps': 5,
                 'pinknoise_amplitude': 100,
                 'pinknoise_exponent': 1,
             },
 }
+
+AVAILABLE_SIMULATIONS = list(simulation_parameters.keys())
+
+# AVAILABLE_SIMULATIONS = [
+#             'standard', '', None,  # use empirical EEG (no simulation)
+#             'null_connectivity',  # no functional connectivity (FC) with EEG simulated with pink noise
+#             'strong_oscillation_only',  # idealized FC with noiseless wavelet oscillations giving non-physiologically strong FC
+#             'oscillation_only',  # idealized FC with noiseless wavelet oscillations having realistic FC
+#             'noisy_oscillation',  # wavelet oscillations plus additive pink noise
+# ]
 
 
 def generate_pink_noise(N_samples, pinknoise_amplitude, pinknoise_exponent):
@@ -186,7 +211,7 @@ def sample_eeg(n_events,
         coords=coords,
         dims=list(coords.keys()),
     )
-
+    
     return eeg
 
 
@@ -195,8 +220,8 @@ def compute_ppc_matrix_nonoverlapping(phase, sample_rate, epoch_width_ms=200, ti
         raise ValueError()
     electrode_count = len(phase.channel)
     freq_count = len(phase.frequency)
-    epoch_size = int(sample_rate * epoch_width_ms / 1000)
-    epoch_count = int(np.round(phase.shape[time_axis] / epoch_size))
+    duration_ms = phase['time'].max() - phase['time'].min()
+    epoch_count = int(np.round(duration_ms / epoch_width_ms))
     ppcs = np.full((electrode_count, electrode_count, freq_count, epoch_count), np.nan)
     for iElec in np.arange(electrode_count):
         for jElec in np.arange(electrode_count):
@@ -212,7 +237,7 @@ def compute_ppc_matrix_nonoverlapping(phase, sample_rate, epoch_width_ms=200, ti
                         coords={'channel1': phase.channel.values,
                                 'channel2': phase.channel.values,
                                 'frequency': phase.frequency,
-                                'epoch': np.arange(epoch_count) * epoch_size,
+                                'epoch': np.arange(epoch_count) * epoch_width_ms + phase['time'].min().item(),
                         }
                        )
     
@@ -271,7 +296,7 @@ def get_block_diagonal_ppc_matrix(n_channels=16,
             ppc_matrix[channel:channel + n_channels_per_region, 
                        channel:channel + n_channels_per_region] = within_region_ppc
     else:
-        assert isinstance(regions, list) and all([isinstance(region, str) for region in regions])
+        assert isinstance(regions, list) and all([isinstance(region, str) or np.isnan(region) for region in regions])
         assert within_group_ppc <= within_region_ppc
         n_channels = len(regions)
         ppc_matrix = np.ones((n_channels, n_channels)) * global_ppc

@@ -10,7 +10,6 @@ from copy import deepcopy
 
 # Data Loading
 import cmlreaders as cml #Penn Computational Memory Lab's library of data loading functions
-from cmlreaders.eeg_container import EEGContainer
 
 # Data Handling
 import os
@@ -95,15 +94,13 @@ def get_eeg(dfrow, events, start, end, simulation_tag=None):
                                montage=mon)
         pairs = get_pairs(dfrow)
         eeg = reader.load_eeg(events, start, end, scheme=pairs)
+        eeg = eeg.to_ptsa()
+        time_unit = 'millisecond'
         
-        if simulation_tag not in ['standard', '', None]:
-            # replace experimentally recorded EEG with simulated EEG to validate analysis pipeline
-            eeg = replace_w_simulated_EEG(eeg, dfrow, scheme=pairs, simulation_tag=simulation_tag)
-        
-        eeg = eeg.to_ptsa() 
     elif eeg_data_source == 'ptsa':
         eeg = get_ptsa_eeg(dfrow, events, start, end)
-        
+        time_unit = 'second'
+    
     sr = float(eeg.samplerate)
     if 'sr' in events.attrs: 
         assert events.attrs['sr'] == sr, 'sampling rate is wrong'
@@ -113,6 +110,15 @@ def get_eeg(dfrow, events, start, end, simulation_tag=None):
     if 'channels' in eeg.dims: dim_map['channels'] = 'channel'
     eeg = eeg.rename(dim_map)
     eeg = eeg.transpose('event', 'channel', 'time')
+    
+    if simulation_tag not in ['standard', '', None]:
+        # replace experimentally recorded EEG with simulated EEG to validate analysis pipeline
+        eeg = replace_w_simulated_EEG(eeg,
+                                      dfrow,
+                                      eeg_data_source=eeg_data_source,
+                                      time_unit=time_unit,
+                                      condition_mask=events.attrs['mask'],
+                                      simulation_tag=simulation_tag)
     
     return eeg, events.attrs['mask']
 
@@ -125,7 +131,7 @@ def get_ptsa_eeg(dfrow, events, start, end):
     tal_reader = TalReader(filename=f'/data/eeg/{sub}{mon_}/tal/{sub}{mon_}_talLocs_database_bipol.mat')
     channels = tal_reader.get_monopolar_channels()
     eeg = EEGReader(events=events, channels=channels,
-                start_time=start/1000, end_time=end/1000).read()
+                    start_time=start/1000, end_time=end/1000).read()
 
     bipolar_pairs = tal_reader.get_bipolar_pairs()
     pairs = get_pairs(dfrow)
@@ -133,7 +139,7 @@ def get_ptsa_eeg(dfrow, events, start, end):
     bipolar_pairs = np.asarray([pair for pair in bipolar_pairs if tuple((int(pair[0]), int(pair[1]))) in pair_tuples_select], dtype=[('ch0', 'S3'), ('ch1', 'S3')]).view(np.recarray)
     mapper= MonopolarToBipolarMapper(bipolar_pairs=bipolar_pairs)
     eeg = mapper.filter(timeseries=eeg)
-
+    
     return eeg
 
 def get_beh_eeg(dfrow, events, save=True, simulation_tag=None):
@@ -308,9 +314,9 @@ def timebin_phase_timeseries(timeseries, sr): return timebin_timeseries(timeseri
     
 def timebin_power_timeseries(timeseries, sr): return timebin_timeseries(timeseries, sr, np.mean)
 
-def timebin_timeseries(timeseries, sr, average_function):
+def timebin_timeseries(timeseries, sr, average_function, bin_size_ms=200):
     
-    bin_size = int(sr * (1/1000) * 200)
+    bin_size = int(sr * (1/1000) * bin_size_ms)
     bin_count = int(np.round(timeseries.shape[-1] / bin_size))
     
     timebinned_timeseries = []
@@ -540,12 +546,14 @@ def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=N
 
 def replace_w_simulated_EEG(original_eeg,
                             dfrow,
-                            scheme=None,
+                            condition_mask,
                             simulation_tag=None,
+                            eeg_data_source='cmlreaders',
+                            time_unit='millisecond',
                             random_state=None,
                             random_state_type='offset_from_eeg_hash',
                             verbose=False):
-    assert isinstance(original_eeg, EEGContainer)
+    assert isinstance(original_eeg, TimeSeries)
     assert simulation_tag in AVAILABLE_SIMULATIONS
     
     if random_state_type == 'offset_from_eeg_hash':
@@ -563,38 +571,68 @@ def replace_w_simulated_EEG(original_eeg,
     
     if simulation_tag in ['standard', '', None]:
         return original_eeg
-    eeg = deepcopy(original_eeg)
+    eeg = original_eeg.copy()
     
     parameters = simulation_parameters[simulation_tag]
     
     wavelet_amplitude = parameters['wavelet_amplitude']
     get_phase_covariance = parameters['phase_covariance_function']
     if get_phase_covariance == 'within_region_group':
-        assert scheme is not None
+        pairs = get_pairs(dfrow)
+        if eeg_data_source == 'ptsa':
+            # confirm that EEG channels match pairs dataframe used for localizations
+            contact_numbers = [[int(pair.item()[0].decode('utf-8')),
+                                int(pair.item()[1].decode('utf-8')),
+                                pair]
+                               for pair in eeg.channel]
+            contact_numbers = pd.DataFrame(contact_numbers, columns=['contact_1', 'contact_2', 'eeg_pair'])
+            merge_columns = ['contact_1', 'contact_2']
+            pairs = pairs.merge(contact_numbers[merge_columns], on=merge_columns)
+            assert len(pairs) == len(contact_numbers)
+        elif eeg_data_source != 'cmlreaders':
+            raise ValueError
+        
         localization = get_localization(dfrow)
-        regionalizations = regionalize_electrodes(scheme, localization)
-        regionalizations = exclude_regionalizations(dfrow, scheme, regionalizations)
-        assert (pd.Series(regionalizations).str.startswith('L ') | pd.Series(regionalizations).str.startswith('R ')).all()
-        # use hemispheres for simple regional grouping
+        regionalizations = regionalize_electrodes(pairs, localization)
+        regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
+        region_series = pd.Series(regionalizations)
+        has_hemisphere_mask = region_series.str.startswith('L ') | region_series.str.startswith('R ') | region_series.isna()
+        if not has_hemisphere_mask.all():
+            # print(region_series[~has_hemisphere_mask])
+            # display(region_series)
+            raise ValueError
+        # use hemispheres for simple regional grouping (put rare NaN region channels in 'Right' group)
         region_groups = ['Left' if left else 'Right' for left in pd.Series(regionalizations).str.startswith('L ')]
         
         from simulate_eeg import get_block_diagonal_ppc_matrix, ppc_matrix_to_wrapped_normal_covariance
 
-        ppc_matrix = get_block_diagonal_ppc_matrix(n_channels=None,
-                                                   n_regions=None,
-                                                   n_region_groups=None,
-                                                   regions=list(regionalizations),
-                                                   region_groups=list(region_groups),
-                                                   global_ppc=parameters['global_ppc'],
-                                                   within_group_ppc=parameters['within_group_ppc'],
-                                                   within_region_ppc=parameters['within_region_ppc'],
-                                                   verbose=verbose,
-                                                  )
-        cov = ppc_matrix_to_wrapped_normal_covariance(ppc_matrix)
+        ppc_matrix0 = get_block_diagonal_ppc_matrix(n_channels=None,
+                                                    n_regions=None,
+                                                    n_region_groups=None,
+                                                    regions=list(regionalizations),
+                                                    region_groups=list(region_groups),
+                                                    global_ppc=parameters['global_ppc0'],
+                                                    within_group_ppc=parameters['within_group_ppc0'],
+                                                    within_region_ppc=parameters['within_region_ppc0'],
+                                                    verbose=verbose,
+                                                   )
+        cov0 = ppc_matrix_to_wrapped_normal_covariance(ppc_matrix0)
         
-        # cov = get_phase_covariance()
+        ppc_matrix1 = get_block_diagonal_ppc_matrix(n_channels=None,
+                                                    n_regions=None,
+                                                    n_region_groups=None,
+                                                    regions=list(regionalizations),
+                                                    region_groups=list(region_groups),
+                                                    global_ppc=parameters['global_ppc1'],
+                                                    within_group_ppc=parameters['within_group_ppc1'],
+                                                    within_region_ppc=parameters['within_region_ppc1'],
+                                                    verbose=verbose,
+                                                   )
+        cov1 = ppc_matrix_to_wrapped_normal_covariance(ppc_matrix1)
+        
     elif get_phase_covariance is None:
-        cov = None
+        cov0 = None
+        cov1 = None
     else:
         raise NotImplementedError(f'Phase covariance method {get_phase_covariance} is not implemented!')
     oscillation_frequency = parameters['oscillation_frequency']
@@ -605,20 +643,72 @@ def replace_w_simulated_EEG(original_eeg,
     
     start_time_ms = original_eeg.time.min()
     duration_ms = original_eeg.time.max() - start_time_ms
+    if time_unit == 'second':
+        start_time_ms *= 1000
+        duration_ms *= 1000
     
-    simulated_eeg = sample_eeg(n_events=len(eeg.events),
-                               n_channels=len(eeg.channels),
-                               sample_rate_Hz=eeg.samplerate,
-                               start_time_ms=start_time_ms,
-                               duration_ms=duration_ms,
-                               connectivity_frequency_Hz=oscillation_frequency,
-                               morlet_reps=morlet_reps,
-                               wavelet_amplitude=wavelet_amplitude,
-                               phase_mean=np.zeros(len(cov)) if cov is not None else None,
-                               phase_covariance=cov,
-                               pinknoise_amplitude=pinknoise_amplitude,
-                               pinknoise_exponent=pinknoise_exponent,
+    eeg = eeg.assign_coords(_index=("event", np.arange(len(eeg['event'])))).set_index(event='_index', append=True)
+    eeg0 = eeg[~condition_mask]
+    eeg1 = eeg[condition_mask]
+    
+    simulated_eeg0 = sample_eeg(n_events=len(eeg0.event),
+                                n_channels=len(eeg0.channel),
+                                sample_rate_Hz=eeg0.samplerate,
+                                start_time_ms=start_time_ms,
+                                duration_ms=duration_ms,
+                                connectivity_frequency_Hz=oscillation_frequency,
+                                morlet_reps=morlet_reps,
+                                wavelet_amplitude=wavelet_amplitude,
+                                phase_mean=np.zeros(len(cov0)) if cov0 is not None else None,
+                                phase_covariance=cov0,
+                                pinknoise_amplitude=pinknoise_amplitude,
+                                pinknoise_exponent=pinknoise_exponent,
     )
-    eeg.data = simulated_eeg.values
-    eeg.time = simulated_eeg.time
-    return eeg
+    
+    simulated_eeg1 = sample_eeg(n_events=len(eeg1.event),
+                                n_channels=len(eeg1.channel),
+                                sample_rate_Hz=eeg1.samplerate,
+                                start_time_ms=start_time_ms,
+                                duration_ms=duration_ms,
+                                connectivity_frequency_Hz=oscillation_frequency,
+                                morlet_reps=morlet_reps,
+                                wavelet_amplitude=wavelet_amplitude,
+                                phase_mean=np.zeros(len(cov1)) if cov1 is not None else None,
+                                phase_covariance=cov1,
+                                pinknoise_amplitude=pinknoise_amplitude,
+                                pinknoise_exponent=pinknoise_exponent,
+    )
+    simulated_eeg0 = simulated_eeg0.assign_coords(event=eeg0.event)
+    simulated_eeg1 = simulated_eeg1.assign_coords(event=eeg1.event)
+    simulated_eeg0 = simulated_eeg0.assign_coords(channel=eeg0.channel)
+    simulated_eeg1 = simulated_eeg1.assign_coords(channel=eeg1.channel)
+    
+    del eeg0, eeg1
+    from matrix_operations import sort_multi_index_coord
+    if not np.all(simulated_eeg0.time == simulated_eeg1.time):
+        raise ValueError('Time values in simulated EEG do not match across conditions')
+    
+    simulated_eeg = xr.concat([simulated_eeg0, simulated_eeg1], 'event')
+    # sort back into original event order
+    simulated_eeg = sort_multi_index_coord(simulated_eeg, 'event', '_index')
+    simulated_eeg = simulated_eeg.reset_index('_index', drop=True)
+    simulated_eeg.attrs['samplerate'] = original_eeg.samplerate
+    assert original_eeg.event.equals(simulated_eeg.event)
+    assert original_eeg.channel.equals(simulated_eeg.channel)
+    assert original_eeg.samplerate.equals(simulated_eeg.samplerate)
+    if 'samplerate' in original_eeg.attrs:
+        simulated_eeg.attrs['samplerate'] = simulated_eeg.samplerate
+    
+    if time_unit == 'second':
+        simulated_eeg = simulated_eeg.assign_coords({'time': simulated_eeg['time'] / 1000})
+
+    # print('simulated_eeg at the end of replace_w_simulated_eeg():')
+    # display(simulated_eeg.coords)
+    # display(simulated_eeg.dims)
+    # display(simulated_eeg.shape)
+    # display(len(simulated_eeg))
+    
+    # attributes match for EEG loaded with cmlreaders but EEG loaded with PTSA has different attributes that appear to not matter
+    # assert original_eeg.attrs == simulated_eeg.attrs, f'Attributes of simulated EEG do not match original. '
+    #         f'Original attributes:\n{original_eeg.attrs}\n\nReplacement attributes:\n{simulated_eeg.attrs}'
+    return simulated_eeg

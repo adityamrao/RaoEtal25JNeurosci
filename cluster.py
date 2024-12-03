@@ -21,7 +21,8 @@ def wait(futures, client, check_delay=10, cancel_prop=1.0, checkpoint_file=None,
         sleep(check_delay)
         clear_output()
         # TODO: should probably reserve full result gathering if visualize_func is specified to reduce network load/overhead
-        results = client.gather(CMLDask.filter_futures(futures))  # get finished results
+        finished_futures = CMLDask.filter_futures(futures)
+        n_finished = len(finished_futures)
         
         # check for errors and cancel simulation if over cancel_prop proportion of jobs are errors
         errors = None
@@ -30,15 +31,15 @@ def wait(futures, client, check_delay=10, cancel_prop=1.0, checkpoint_file=None,
             print("Dask Errors:")
             print(errors.head())
             n_errors = len(errors)
-            # n_complete = len(results) + n_errors
-            # if (len(errors) >= cancel_prop * n_complete) and (n_complete >= min_check_jobs):
-            #     raise ValueError(f'Dask errors in simulation {tag} after {n_complete} jobs')
         except:
             n_errors = 0
 
         dur = time() - start
-        rate = -1.0 if not len(results) else len(results)/dur
-        print(f'Simulations finished after {dur:0.3} s: {len(results) + n_errors} / {len(futures)} ({rate:0.3} iterations/s). {n_errors} job errors')
+        rate = -1.0 if not n_finished else n_finished/dur
+        print(f'Simulations finished after {dur:0.3} s: {n_finished + n_errors} / {len(futures)} ({rate:0.3} iterations/s). {n_errors} job errors')
+        
+        if checkpoint_file or (visualize_func is not None):
+            results = client.gather(finished_futures)
         
         if visualize_func is not None:
             display(visualize_func(results))
@@ -47,6 +48,6 @@ def wait(futures, client, check_delay=10, cancel_prop=1.0, checkpoint_file=None,
             with open(checkpoint_file, 'wb') as f:
                 pickle.dump(results, f)
                 
-        if len(results) + n_errors == len(futures):
+        if n_finished + n_errors == len(futures):
             print('Simulation complete. Shutting down jobs.')
             break

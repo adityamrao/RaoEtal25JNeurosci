@@ -149,3 +149,45 @@ def sort_array_across_order(arr, order, axis=0, invert_sort=False):
         arr = apply_indexing(arr, sort_idx, ax)
     return arr
 
+
+def sort_multi_index_coord(da, dim, level):
+    """Sorts an xarray DataArray along a multi-index coordinate.
+    Args:
+        da: The xarray DataArray.
+        dim: The dimension with the multi-index coordinate.
+        level: The level (column name) of the multi-index to sort by.
+
+    Returns: The sorted xarray DataArray.
+    """
+    sorted_indices = np.array(np.argsort(da[level]))
+    return da.isel({dim: sorted_indices})
+
+
+def compare_xarray_metadata(da1, da2):
+    """Compares the metadata of two xarray DataArrays for equality.
+
+    Args:
+        da1: The first xarray DataArray.
+        da2: The second xarray DataArray.
+
+    Returns:
+        True if the metadata is equal, False otherwise.
+    """
+
+    if da1.shape != da2.shape:
+        return False
+
+    if da1.dims != da2.dims:
+        
+        return False
+
+    if da1.coords.keys() != da2.coords.keys():
+        return False
+    for coord_name in da1.coords:
+        if not da1[coord_name].equals(da2[coord_name]):
+            return False
+
+    if da1.attrs != da2.attrs:
+        return False
+
+    return True
