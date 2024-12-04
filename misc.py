@@ -100,10 +100,10 @@ def print_whether_significant(p, alpha=0.05):
     if p < alpha: print(f'Statistically Significant (p < {alpha})')
     else: print(f'NOT Statistically Significant (p >= {alpha})')
     
-def print_ttest_1samp(vals, header=None, alternative='two-sided'):
+def print_ttest_1samp(vals, header=None, alternative='two-sided', popmean=0):
     
     vals = finitize(vals)
-    t, p = scipy.stats.ttest_1samp(vals, popmean=0, alternative=alternative)
+    t, p = scipy.stats.ttest_1samp(vals, popmean=popmean, alternative=alternative)
     if header is not None: print_header(header)
     print_whether_significant(p)
     print(f't_{len(vals)-1} = {t:.3}, p = {p:.3}, Mean: {np.mean(vals):.3} ± {scipy.stats.sem(vals):.3}')
