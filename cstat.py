@@ -3,6 +3,10 @@ import scipy.stats
 
 def rectangularize(m):
     
+    '''
+    Returns the cosine and sine of a set of phase values.
+    '''
+    
     m = np.expand_dims(m, axis=0)
     return np.vstack([np.cos(m), np.sin(m)])
 
@@ -18,6 +22,10 @@ def circ_diff(x, y):
     return regularize(x - y)
 
 def regularize(x):
+    
+    '''
+    Converts a set of phase values to the equivalent phase values within the range [-pi, pi].
+    '''
     
     return np.mod(x + np.pi, 2*np.pi) - np.pi
 

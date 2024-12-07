@@ -64,6 +64,21 @@ def print_root_dir():
 
 def load_events(dfrow, beh):
     
+    '''
+    Loads behavioral events for a particular experimental session and behavioral contrast.
+    Requires that the events data and metadata file have already been saved out (see the "Get behavioral events" section in WholeBrainConnectivityPPCRevision.ipynb).
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        beh : str
+            Behavioral contrast label ('en', 'en_all', 'rm', or 'ri').
+        
+    Returns:
+        events : pandas.DataFrame
+            Behavioral events for a particular experimental session and behavioral contrast.
+    '''
+    
     evs_path = join(root_dir, beh, 'events', f'{ftag(dfrow)}_events.json')
     evs_metadata_path = join(root_dir, beh, 'events', f'{ftag(dfrow)}_events_metadata.json')
     if not ex(evs_path): return None
@@ -75,6 +90,26 @@ def load_events(dfrow, beh):
     return events
 
 def get_eeg(dfrow, events, start, end, simulation_tag=None):
+    
+    '''
+    Returns EEG signal for a particular session and set of behavioral events.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        events : pandas.DataFrame
+            Behavioral events.
+        start : float
+            Time (ms) at which returned EEG clip should begin, relative to a particular event.
+        end : float
+            Time (ms) at which returned EEG clip should end, relative to a particular event.
+        simulation_tag : str
+            Label of parameter set used to generate simulated EEG signal.
+    
+    Returns:
+        eeg : ptsa.data.TimeSeries
+            EEG clip.
+    '''
     
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
     sess_list_df = pd.read_json(join(root_dir, 'sess_list_df.json'))
@@ -124,6 +159,24 @@ def get_eeg(dfrow, events, start, end, simulation_tag=None):
 
 def get_ptsa_eeg(dfrow, events, start, end):
     
+    '''
+    Returns EEG signal for a particular session and set of behavioral events, using the ptsa readers. Used to load EEG for pyFR experimental sessions whose data could not be loaded with cmlreaders.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        events : pandas.DataFrame
+            Behavioral events.
+        start : float
+            Time (ms) at which returned EEG clip should begin, relative to a particular event.
+        end : float
+            Time (ms) at which returned EEG clip should end, relative to a particular event.
+    
+    Returns:
+        eeg : ptsa.data.TimeSeries
+            EEG clip.
+    '''
+    
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
     mon_ = '' if mon==0 else f'_{mon}' #for tal_reader path name
 
@@ -143,6 +196,24 @@ def get_ptsa_eeg(dfrow, events, start, end):
     return eeg
 
 def get_beh_eeg(dfrow, events, save=True, simulation_tag=None):
+    
+    '''
+    Returns processed EEG signal to be analyzed for a particular behavioral contrast.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        events : pandas.DataFrame
+            Behavioral events.
+        save : bool
+            Whether to save out the loaded raw EEG signal (True) or not (False).
+        simulation_tag : str
+            Label of parameter set used to generate simulated EEG signal.
+    
+    Returns:
+        eeg : ptsa.data.TimeSeries
+            EEG clip.
+    '''
 
     beh = events.attrs['beh']
     start, end = beh_to_event_windows[beh]
@@ -158,6 +229,20 @@ def get_beh_eeg(dfrow, events, save=True, simulation_tag=None):
 
 def notch_filter(eeg, sub):
     
+    '''
+    Applies a Butterworth filter to EEG signal at 60 or 50 Hz to remove line noise.
+    
+    Parameters:
+        eeg : ptsa.data.TimeSeries
+            EEG signal to be notch-filtered.
+        sub : str
+            Subject code. Used to decide notch filter frequency: if a German (Freiburg) subject, filter at 50 Hz, else at 60 Hz. 
+        
+    Returns:
+        eeg : ptsa.data.TimeSeries
+            Notch-filtered EEG signal.
+    '''
+    
     filter_freqs = [48., 52.] if 'FR' in sub else [58., 62.]
     
     from ptsa.data.filters import ButterworthFilter
@@ -167,6 +252,21 @@ def notch_filter(eeg, sub):
     return eeg
 
 def mirror_buffer(eeg, buffer_length, axis=-1):
+    
+    '''
+    Append a mirror buffer to EEG signal.
+    If the EEG signal passed to the function is of the form (x_1, ..., x_n), then the buffered signal will be of the form (x_i, ..., x_1, x_1, ..., x_n, x_n, ..., x_(n-i+1)), where 1 <= i <= n.
+    
+    Parameters:
+        eeg : ptsa.data.TimeSeries
+            EEG signal to which to append the mirror buffer. 
+        buffer_length : float
+            Duration (ms) of buffer.
+        
+    Returns:
+        buffered_eeg : ptsa.data.TimeSeries
+            EEG signal with mirror buffer appended on both sides.
+    '''
     
     sr = float(eeg.samplerate)
     tmpt_length = int(buffer_length * (1/1000) * sr)
@@ -179,11 +279,37 @@ def mirror_buffer(eeg, buffer_length, axis=-1):
 
 def get_pairs(dfrow):
     
+    '''
+    Returns the bipolar electrode pairs data for a session.
+    Requires that the bipolar electrode pairs data have been already saved out (see 'Check data availability' section in WholeBrainConnectivityPPCRevision.ipynb). 
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+    
+    Returns:
+        pandas.DataFrame
+            Bipolar electrode pairs data.
+    
+    '''
+    
     path = join(root_dir, 'electrode_information', 'pairs', f'{ftag(dfrow)}_pairs.json')
     if ex(path): return pd.read_json(path).fillna('nan')
     else: return None
 
 def get_localization(dfrow):
+    
+    '''
+    Returns the localization data for a session. Requires that the localization data have already been saved out (see the 'Check data availability' section in WholeBrainConnectivityPPCRevision.ipynb). 
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+    
+    Returns:
+        localization : pandas.DataFrame
+            Localization data.
+    '''
     
     path = join(root_dir, 'electrode_information', 'localization', f'{ftag(dfrow)}_localization.json')
     if ex(path): localization = pd.read_json(path).fillna('nan')
@@ -195,6 +321,19 @@ def get_localization(dfrow):
 
 def get_sr(dfrow):
     
+    '''
+    Returns the sampling rate of a session.
+    Requires that the localization data have been already saved out in the session list DataFrame (see 'Check data availability' section in WholeBrainConnectivityPPCRevision.ipynb). 
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        
+    Returns:
+        sr : float
+            Sampling rate.
+    '''
+    
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
     sess_list_df = pd.read_json(join(root_dir, 'sess_list_df_data_check.json'))
     sess_list_df.set_index(['sub', 'exp', 'sess', 'loc', 'mon'], inplace=True)
@@ -203,6 +342,18 @@ def get_sr(dfrow):
     return sr
 
 def find_overlapping_pairs(pairs):
+    
+    '''
+    Returns a list of bipolar pairs that share a monopolar contact.
+    
+    Parameters:
+        pairs : pandas.DataFrame
+            Bipolar pairs data.
+    
+    Returns:
+        overlapping_pairs : list
+            List of tuples of the form (i, j), where i is the row index of a bipolar pair in the pairs DataFrame and j is the row index of a bipolar pair that shares a monopolar contact.
+    '''
 
     overlapping_pairs = []
     for elec1 in np.arange(len(pairs)):
@@ -220,6 +371,13 @@ def find_overlapping_pairs(pairs):
 
 def get_region_information(key=None):
     
+    '''
+    Returns information about the regionalization scheme. 
+    
+    Parameters:
+        key (str): Which information to return ('region_translator', 'original_labels', 'unique_region_names', or 'region_labels').
+    '''
+    
     region_translator = pd.read_csv('region_translator.csv', na_filter=False).set_index('atlas_label')
     original_labels = np.unique(region_translator.index)
     unique_region_names = np.sort(region_translator.query('region != "nan"')['region'].unique())
@@ -233,6 +391,20 @@ def get_region_information(key=None):
     return region_lists[key] if key is not None else region_lists
 
 def get_atlas_labels(pairs, localization): 
+    
+    '''
+    Returns the label from the best available brain region atlas for a session's electrode channels.
+    
+    Parameters:
+        pairs : pandas.DataFrame
+            Bipolar electrode pairs data.
+        localization : pandas.DataFrame
+            Localization data.
+    
+    Returns:
+        pandas.DataFrame
+            Table of bipolar electrode pairs, their best atlas label, and the atlases from which those labels were taken.
+    '''
     
     if len(localization) > 0: 
 
@@ -258,6 +430,20 @@ def get_atlas_labels(pairs, localization):
     return pairs.rename({'label': 'pair_label'}, axis=1)[['pair_label', 'atlas_label', 'atlas']]
 
 def regionalize_electrodes(pairs, localization):
+    
+    '''
+    Returns a list of each channel's regionalization, in order of the channels. 
+    
+    Parameters:
+        pairs : pandas.DataFrame
+            Bipolar electrode pairs data.
+        localization : pandas.DataFrame
+            Localization data.
+        
+    Returns:
+        regionalizations : array_like
+            List of each channel's regionalization, in order of the channels. 
+    '''
 
     regionalizations = get_atlas_labels(pairs, localization)
     region_translator = get_region_information('region_translator')
@@ -286,6 +472,22 @@ def regionalize_electrodes(pairs, localization):
     return (regionalizations['hemisphere'] + ' ' + regionalizations['region']).values
 
 def exclude_regionalizations(dfrow, pairs, regionalizations):
+    
+    '''
+    Excludes certain channels from the regionalizations of certain sessions when the EEG data for those channels won't load.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        pairs : pandas.DataFrame
+            Bipolar electrode pairs data.
+        regionalizations : array_like
+            List of each channel's regionalization, in order of the channels. 
+
+    Returns:
+        regionalizations : array_like
+            List of each channel's regionalization, in order of the channels, with all necessary exclusions made.
+    '''
     
     missing_channels = None
     
@@ -316,6 +518,24 @@ def timebin_power_timeseries(timeseries, sr): return timebin_timeseries(timeseri
 
 def timebin_timeseries(timeseries, sr, average_function, bin_size_ms=200):
     
+    '''
+    Averages time series within timebins and returns timebinned time series.
+    
+    Parameters:
+        timeseries : numpy.array
+            Time series. Timepoints should be along the last dimension.
+        sr : float
+            Sample rate of the time series.
+        average_function : function
+            Function used for averaging within the timebins (circ_mean or np.mean).
+        bin_size_ms : float
+            Duration (ms) represented by a single timebin.
+            
+    Returns:
+        timebinned_timeseries : numpy.array
+            Timebinned timeseries.
+    '''
+    
     bin_size = int(sr * (1/1000) * bin_size_ms)
     bin_count = int(np.round(timeseries.shape[-1] / bin_size))
     
@@ -333,9 +553,37 @@ def timebin_timeseries(timeseries, sr, average_function, bin_size_ms=200):
 
 def clip_buffer(timeseries, buffer_length):
     
+    '''
+    Returns signal after clipping buffer.
+    
+    Parameters:
+        timeseries : xarray.DataArray, ptsa.data.TimeSeries
+            Time series (EEG, power, phase) with 'time' dimension.
+        buffer_length : float
+            Number of samples (NOT duration) to clip from both ends of the time series.
+        
+    Returns
+        xarray.DataArray, ptsa.data.TimeSeries
+            Time series with buffer clipped.
+    '''
+    
     return timeseries.isel(time=np.arange(buffer_length, len(timeseries['time'])-buffer_length))
 
 def get_phase(eeg, freqs):
+
+    '''
+    Returns time series of spectral phase values from Morlet wavelet convolution.
+    
+    Parameters:
+        eeg : ptsa.data.TimeSeries
+            EEG clip.
+        freqs : numpy.array
+            Wavelet frequencies at which to extract phase values.
+            
+    Returns
+        phase : ptsa.data.TimeSeries
+            Time series of phase values.
+    '''
     
     wavelet_filter = MorletWaveletFilter(freqs=freqs, width=5, output='phase', complete=True)
     phase = wavelet_filter.filter(timeseries=eeg)
@@ -344,6 +592,28 @@ def get_phase(eeg, freqs):
     return phase 
 
 def process_phase(dfrow, events, freqs, simulation_tag=None):
+    
+    '''
+    Returns the phase time series to be analyzed for a session and set of behavioral events.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        events : pandas.DataFrame
+            Behavioral events.
+        freqs : numpy.array
+            Frequencies at which to extract phase values.
+        simulation_tag : str
+            Label of parameter set used to generate simulated EEG signal.
+            
+    Returns
+        phase : ptsa.data.TimeSeries
+            Time series of phase values.
+        mask : numpy.array
+            List of boolean variables indicating whether the event was a successful memory event (True) or an unsuccessful memory event (False).
+        sr : float
+            Sample rate.
+    '''
     
     eeg, mask = get_beh_eeg(dfrow, events, simulation_tag=simulation_tag)
     phase = get_phase(eeg, freqs)
@@ -354,6 +624,20 @@ def process_phase(dfrow, events, freqs, simulation_tag=None):
     return phase, mask, sr
 
 def get_power(eeg, freqs):
+    
+    '''
+    Returns time series of spectral power values. Performs Morlet wavelet convolution, log-transforms power, clips buffer, and z-scores power values.
+    
+    Parameters:
+        eeg : ptsa.data.TimeSeries
+            EEG clip.
+        freqs : numpy.array
+            Wavelet frequencies at which to extract phase values.
+            
+    Returns
+        power : ptsa.data.TimeSeries
+            Time series of power values.
+    '''
     
     wavelet_filter = MorletWaveletFilter(freqs=freqs, width=5, output='power', complete=True)
     power = wavelet_filter.filter(timeseries=eeg)
@@ -373,6 +657,26 @@ def get_power(eeg, freqs):
 
 def process_power(dfrow, events, freqs, simulation_tag=None):
     
+    '''
+    Returns the timebinned power time series to be analyzed for a session and set of behavioral events.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        events : pandas.DataFrame
+            Behavioral events.
+        freqs : numpy.array
+            Frequencies at which to extract power values.
+        simulation_tag : str
+            Label of parameter set used to generate simulated EEG signal.
+            
+    Returns
+        power : ptsa.data.TimeSeries
+            Time series of power values.
+        mask : numpy.array
+            List of boolean variables indicating whether the event was a successful memory event (True) or an unsuccessful memory event (False).
+    '''
+    
     eeg, mask = get_beh_eeg(dfrow, events, simulation_tag=simulation_tag)
     sr = float(eeg.samplerate)
     power = get_power(eeg, freqs)
@@ -382,6 +686,24 @@ def process_power(dfrow, events, freqs, simulation_tag=None):
     return power, mask
 
 def get_elsymx(dfrow, freqs, events, simulation_tag=None):
+    
+    '''
+    Computes the electrode-by-electrode synchrony effects matrix.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        freqs : array_like
+            Frequencies at which to extract phase values.
+        events : pandas.DataFrame
+            Behavioral events.
+        simulation_tag : str 
+            Label of parameter set used to generate simulated EEG signal.
+                
+    Returns:
+        elsymx : numpy.array
+            Electrode-by-electrode synchrony effects matrix.
+    '''
     
     overlapping_pairs = find_overlapping_pairs(get_pairs(dfrow))
     
@@ -408,6 +730,24 @@ def get_elsymx(dfrow, freqs, events, simulation_tag=None):
 
 def add_regions_elsymx(elsymx, regionalizations, freqs, beh):
     
+    '''
+    Labels the channel axes of the electrode-by-electrode synchrony effects matrix with their regions, and the frequency and time axes with frequency and time window labels.
+    
+    Parameters:
+        elsymx : numpy.array
+            Electrode-by-electrode synchrony effects matrix.
+        regionalizations : array_like
+            Region labels.
+        freqs : array_like
+            Frequency labels. 
+        beh : str
+            Behavioral contrast label ('en', 'en_all', 'rm', or 'ri')
+    
+    Returns:
+        elsymx_regs : xarray.DataArray
+            Electrode-by-electrode synchrony effects matrix with labeled axes.
+    '''
+    
     elsymx_regs = xr.DataArray(elsymx, 
                                dims=['reg1', 'reg2', 'freq', 'epoch', 'success'],
                                coords={'reg1': (['reg1'], regionalizations), 
@@ -419,6 +759,18 @@ def add_regions_elsymx(elsymx, regionalizations, freqs, beh):
     return elsymx_regs
 
 def regionalize_electrode_connectivities(elsymx):
+    
+    '''
+    Returns region-by-region matrix of synchrony values, generated from averaging the synchrony values of channels in the same region in the electrode-by-electrode synchrony effects matrix.
+    
+    Parameters:
+        elsymx : xarray.DataArray
+            Electrode-by-electrode synchrony effects matrix (labeled array with region labels).
+    
+    Returns: 
+        regsymx : xarray.DataArray
+            Region-by-region synchrony effects matrix.
+    '''
     
     shape = np.array(elsymx.shape)
     region_labels = get_region_information('region_labels')
@@ -448,6 +800,26 @@ def regionalize_electrode_connectivities(elsymx):
 
 def run_pipeline(dfrow, beh, events, save_dir, simulation_tag=None):
     
+    '''
+    Runs the analysis pipeline for phase synchrony effects.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        beh : str
+            Behavioral contrast label ('en', 'en_all', 'rm', or 'ri').
+        events : pandas.DataFrame
+            Behavioral events to be analyzed.
+        save_dir : str
+            Directory to which analysis results should be saved.
+        simulation_tag : str 
+            Label of parameter set used to generate simulated EEG signal.
+    
+    Returns: 
+        regsymx : xarray.DataArray
+            Region-by-region synchrony effects matrix.
+    '''
+    
     freqs = np.arange(3, 9)
     if ex(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc')): return
     
@@ -466,15 +838,55 @@ def run_pipeline(dfrow, beh, events, save_dir, simulation_tag=None):
     
 def cohens_d(x, y):
     
+    '''
+    Returns Cohen's d given two independent samples.
+    
+    Parameters:
+        x (numpy.array): First sample.
+        y (numpy.array): Second sample.
+        
+    Returns:
+        d (float): Cohen's d.
+    '''
+    
     s = np.sqrt(((len(x)-1)*(np.std(x, axis=0, ddof=1)**2) + (len(y)-1)*(np.std(y, axis=0, ddof=1)**2))/(len(x)+len(y)-2))
     d = (np.mean(x, axis=0) - np.mean(y, axis=0))/s
     return d
 
 def welchs_t(x, y): 
     
+    '''
+    Returns Welch's t-statistic for two independent samples.
+    
+    Parameters:
+        x (numpy.array): First sample.
+        y (numpy.array): Second sample.
+        
+    Returns:
+        (float): Welch's t-statistic.
+    '''
+    
     return scipy.stats.ttest_ind(x, y, axis=0, equal_var=False).statistic
 
 def comp_elpomx(dfrow, freqs, events, simulation_tag=None):
+    
+    '''
+    Computes the electrode-wise power effects matrix.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        freqs : array_like
+            Frequencies at which to extract power values.
+        events : pandas.DataFrame
+            Behavioral events.
+        simulation_tag : str 
+            Label of parameter set used to generate simulated EEG signal.
+                
+    Returns:
+        elpomx : pandas.Series
+            Electrode-wise power effects matrices. elpomx['t'] contains a numpy.array with the Welch's t-statistics and elpomx['d'] contains a numpy.array with the Cohen's d statistics.
+    '''
     
     power, mask = process_power(dfrow, events, freqs, simulation_tag=simulation_tag)
     
@@ -486,6 +898,24 @@ def comp_elpomx(dfrow, freqs, events, simulation_tag=None):
 
 def add_regions_elpomx(elpomx, regionalizations, freqs, beh):
     
+    '''
+    Labels the channel axis of the electrode-wise power effects matrix with region labels, and the frequency and time axes with frequency and time window labels.
+    
+    Parameters:
+        elpomx : numpy.array
+            Electrode-wise power effects matrix.
+        regionalizations : array_like
+            Region labels.
+        freqs : array_like
+            Frequency labels.
+        beh : str
+            Behavioral contrast label ('en', 'en_all', 'rm', or 'ri')
+    
+    Returns:
+        elpomx_regs : pandas.Series
+            Electrode-wise power effects matrices with labeled axes. elpomx_regs['t'] contains an xarray.DataArray with the Welch's t-statistics and elpomx_regs['d'] contains an xarray.DataArray with the Cohen's d statistics.
+    '''
+    
     elpomx_regs = pd.Series({})
     elpomx_regs = xr.DataArray(elpomx, 
                                dims=['reg1', 'freq', 'epoch'], 
@@ -496,6 +926,18 @@ def add_regions_elpomx(elpomx, regionalizations, freqs, beh):
     return elpomx_regs
 
 def regionalize_electrode_powers(elpomx):
+    
+    '''
+    Returns region-wise matrix of power effect values, generated from averaging the power effect values of channels in the same region in the electrode-wise power effect matrix.
+    
+    Parameters:
+        elpomx : xarray.DataArray
+            Electrode-wise power effects matrix (labeled array with region labels).
+    
+    Returns: 
+        regpomx : xarray.DataArray
+            Region-wise matrix of power effect values.
+    '''
     
     shape = np.array(elpomx.shape)
     region_labels = get_region_information('region_labels')
@@ -521,6 +963,27 @@ def regionalize_electrode_powers(elpomx):
     return regpomx 
 
 def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=None):
+    
+    '''
+    Runs the analysis pipeline for spectral power effects.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+        band_name : str
+            Frequency band to be analyzed ('theta' or 'gamma').
+        beh : str
+            Behavioral contrast label ('en', 'en_all', 'rm', or 'ri').
+        events : pandas.DataFrame
+            Behavioral events to be analyzed.
+        save_dir : str
+            Directory to which analysis results should be saved.
+        simulation_tag : str 
+            Label of parameter set used to generate simulated EEG signal.
+    
+    Returns: 
+        None
+    '''
     
     if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.nc')): return
 

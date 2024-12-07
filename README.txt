@@ -1,0 +1,69 @@
+"Synchronous theta networks characterize successful memory retrieval"
+
+Rao AM, DeHaan RD, and Kahana MJ
+2024-12-06
+
+This file is a description of this research project's codebase, and contains useful information on navigating the code.
+
+___TIPS___
+
+- At the time of the writing of this code, the cmlreaders and ptsa packages were used to load behavioral events, electrode, localization, regionalization, and EEG data. However, the free recall datasets (catFR1, FR1, and pyFR) that were analyzed in this study have since been migrated to the OpenNeuro platform, where they are available in the Brain Imaging Data Structure (BIDS) standard format.
+
+- Set the root_dir variable in helper.py to specify the root directory, which is the directory to which the pipeline will write files and from which it will read files.
+
+- WholeBrainConnectivityPPCRevision.ipynb contains all the cells needed to create the directory structure within the root directory that the pipeline requires to run. It also contains cells that delete these directories and their files. To avoid inadvertent deletions, it is recommended that you leave the code that deletes files and directories commented out when not in use.
+
+- The "Get behavioral events" section must be run in the workshop_311 environment, unlike the rest of the notebook. More details are provided at the beginning of that section.
+
+- We were not able to reconstruct the workshop or the workshop_311 environments from their YAML files. However, you can see in those files what packages and package versions we used and create new environments accordingly.
+
+- xarray DataArrays are used for labeled arrays. The native method to save them for long-term usage is xarray.DataArray.to_netcdf(). While this method was indeed used in the notebook, it seems pretty problematic. THis method sometimes threw the error "ValueError: No global client found and no address provided for nan values" and failed. Other times, it appeared to work in saving out the xarray.DataArray but the saved .nc file could not subsequently be loaded with xarray.opendataarray(). And yet other times, both xarray.DataArray.to_netcdf() and xarray.opendataarray() executed without error, but the loaded xarray.DataArray contained NaN values in entries that should not have had NaN values, seemingly at random. 
+
+Therefore, we recommend to future users of this codebase that the lines using xarray.DataArray.to_netcdf() and xarray.open_dataarray be replaced with pickling (see the load_pickle and save_pickle functions in misc.py) unless it can be determined that the xarray methods work reliably.
+
+___ABBREVIATIONS___
+
+The following abbreviations were used as variable names to simplify working with the code.
+
+dfrow: a pandas.Series that makes up a row in the session list pandas.DataFrame. Passed to various functions as a label of the session to be analyzed.
+sub: subject
+exp: experiment
+sess: session
+loc: localization
+mon: montage
+
+en: encoding. That is, the behavioral contrast between subsequently recalled and not-recalled encoding items, matched one-to-one by serial position.
+en_all: encoding with all items. That is, the behavioral contrast between ALL subsequently recalled and not-recalled encoding items, NOT matched by serial position. There are almost always many more not-recalled encoding items than recalled encoding items.
+rm: retrieval/matched deliberation. That is, the behavioral contrast between correct recalls and periods of silence, matched by time during the memory task's recall window.
+ri: retrieval/intrusion. That is, the behavioral contrast between correct recalls and intrusions, matched by time during the memory task's recall window.
+
+elsymx: electrode-by-electrode synchrony effects matrix
+regsymx: electrode-by-electrode synchrony effects matrix
+elpomx: electrode-wise power effects (Cohen's d between behavioral memory conditions) matrix
+regpomx: region-wise power effects (Cohen's d between behavioral memory conditions) matrix
+
+___DESCRIPTION OF FILES___
+
+WholeBrainConnectivityPPCRevision.ipynb
+This Jupyter notebook is where the analyses are run and the figures are generated.
+
+helper.py
+This library of functions contains the main functions used to load, process, and analyze the data.
+
+misc.py
+A library of miscellaneous functions (e.g., for saving and loading data, for labeling sessions, and for printing and displaying variables and statistics).
+
+cstat.py
+A library of functions for circular statistics.
+
+matrix_operations.py
+A library of functions for working with matrices.
+
+unit_tests.ipynb
+Some unit tests and checks for the functions in helper.py, cstat.py, and matrix_operations.py.
+
+non_analysis_figures_and_subject_sex.ipynb
+Code to generate a methods schematic figure and to get the sex information for the analyzed experimental subjects.
+
+preferred.mplstyle
+A matplotlib style sheet used for figure generation.

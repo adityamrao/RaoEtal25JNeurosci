@@ -21,6 +21,18 @@ import xarray as xr
 
 def ftag(dfrow):
     
+    '''
+    Returns a session label as a string that can be used for file names.
+    
+    Parameters:
+        dfrow : pandas.Series
+            Session label.
+            
+    Returns:
+        str
+            Session label as a string for file names.
+    '''
+    
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
     if (int(loc) == 0) and (int(mon) == 0):
         return f'{sub}_{exp}_{sess}'
@@ -28,6 +40,10 @@ def ftag(dfrow):
         return f'{sub}_{exp}_{sess}_{loc}_{mon}'
 
 def npl(fname):
+    
+    '''
+    Convenience function for numpy.load.
+    '''
     
     return np.load(join('/scratch/amrao', fname), allow_pickle=True)
     
@@ -40,6 +56,18 @@ def load_mat(path):
         return f
     
 def get_dfrow(dfrow):
+    
+    '''
+    Converts a session label typed as a tuple, list, or numpy.array into a session label as a pandas.Series.
+    
+    Parameters:
+        dfrow : tuple, list, numpy.array
+            Session label in the form (sub, exp, sess, loc, mon) --- i.e., (subject, experiment, session, localization, montage).
+            
+    Returns:
+        dfrow : pandas.Series
+            Session label with 'sub', 'exp', 'sess', 'loc', and 'mon' keys.
+    '''
     
     if len(dfrow) == 3:
         sub, exp, sess = dfrow
@@ -56,10 +84,18 @@ def get_dfrow(dfrow):
 
 def load_pickle(path):
     
+    '''
+    Convenience function for loading pickle files.
+    '''
+    
     with open(path, 'rb') as f:
         return pickle.load(f)
 
 def save_pickle(path, obj):
+    
+    '''
+    Convenience function for saving pickle files.
+    '''
     
     with open(path, 'wb') as f:
         pickle.dump(obj, f)
@@ -89,6 +125,11 @@ def iterative_avg(avg, update, index_tracker):
     return avg, index_tracker
 
 def display_all():
+    
+    '''
+    Display all rows and columns of a pandas.DataFrame in the cell of a Jupyter notebook.
+    '''
+    
     pd.set_option("display.max_rows", None, "display.max_columns", None)
     np.set_printoptions(threshold=np.inf)
     
@@ -140,6 +181,20 @@ def print_pearsonr(a, b, header=None):
     return r
 
 def jzs_bayes_factor(t, N):
+    
+    '''
+    Returns the JZS Bayes factor.
+    
+    Parameters:
+        t : float
+            t-statistic.
+        N : int
+            Number of samples.
+            
+    Returns:
+        B : float
+            JZS Bayes factor.
+    '''
     
     from scipy.integrate import quad as integral
     v = N - 1

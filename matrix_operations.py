@@ -4,21 +4,41 @@ from copy import deepcopy
 
 def any_finite(x):
     
+    '''
+    Returns True if ANY of the values in the passed array_like are NOT NaN values, and otherwise False.
+    '''
+    
     return np.any(np.isfinite(x))
 
 def all_finite(x):
+    
+    '''
+    Returns True if ALL of the values in the passed array_like are NOT NaN values, and otherwise False.
+    '''
     
     return np.all(np.isfinite(x))
 
 def count_finite(x):
     
+    '''
+    Returns the percentage of values that are NOT NaN.
+    '''
+    
     return np.sum(np.isfinite(x))/np.prod(x.shape)
 
 def finitize(x):
     
+    '''
+    Returns the unraveled set of values that are not NaN.
+    '''
+    
     return x[np.isfinite(x)]
 
 def symmetrize(mx):
+    
+    '''
+    Given a matrix whose upper or lower triangle consists of NaN values, fills in the NaN values with the values from the other triangle and returns the resulting symmetric matrix.
+    '''
     
     return np.nanmean([mx, np.swapaxes(mx, 0, 1)], axis=0)
 
