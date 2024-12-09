@@ -204,6 +204,85 @@ def jzs_bayes_factor(t, N):
     B = numerator/denominator
     return B
 
+def one_stage_linear_step_up(ps, alpha=0.05):
+    '''
+    Implementation of the Benjamini-Hochberg (1995) procedure.
+    '''
+    
+    m = len(ps)
+    ranks = np.argsort(np.argsort(ps))+1
+    ps_ = np.asarray([(m*p)/j for j, p in zip(ranks, ps)])
+    ps_corr = np.asarray([np.min(ps_[ranks >= i]) for i in ranks])
+    ps_corr[ps_corr > 1] = 1
+    
+    return pd.Series({'ps_corr': ps_corr,
+                      'rejected': ps_corr < alpha})
+
+def two_stage_linear_step_up(ps, alpha=0.05):
+    '''
+    Implementation of the Benjamini-Yekutieli (2006) FDR control procedure,
+    as described in Defintion 6 (two-stage linear step-up procedure). 
+    '''    
+    
+    m = len(ps)
+    ranks = np.argsort(np.argsort(ps))+1
+    ps_ = np.asarray([(m*p*(1+alpha))/j for j, p in zip(ranks, ps)])
+    ps_corr = np.asarray([np.min(ps_[ranks >= i]) for i in ranks])
+    ps_corr[ps_corr > 1] = 1
+    r1 = np.sum(ps_corr < alpha)
+    m0 = m - r1
+    
+    if r1 not in [0, m]:
+        ps_ = np.asarray([(m0*p*(1+alpha))/j for j, p in zip(ranks, ps)])
+        ps_corr = np.asarray([np.min(ps_[ranks >= i]) for i in ranks])
+        ps_corr[ps_corr > 1] = 1
+        
+    return pd.Series({'ps_corr': ps_corr,
+                      'rejected': ps_corr < alpha})
+
+def tfce(ts):
+    
+    '''
+    Threshold-free cluster enhancement.
+    
+    Parameters:
+        ts : numpy.array
+            A two-dimensional array of t-statistics.
+            
+    Returns:
+        ts_tfce : numpy.array
+            A two-dimmensional array of the TFCE-enhanced t-statistics.
+    '''
+    
+    import skimage
+    
+    def one_sided_tfce(ts, thresholds, comparison_function):
+        
+        ts_tfce = np.zeros_like(ts)
+        
+        for threshold in thresholds:
+
+            ts_beyond_threshold = comparison_function(ts, threshold)
+            ts_clustered = skimage.measure.label(ts_beyond_threshold, connectivity=2)
+            
+            cluster_sizes = np.zeros_like(ts_clustered)
+            for iCluster in np.arange(1, np.max(ts_clustered) + 1):
+                cluster_sizes[ts_clustered == iCluster] = np.sum(ts_clustered == iCluster)
+                
+            for m in np.arange(ts.shape[0]):
+                for n in np.arange(ts.shape[1]):
+                    ts_tfce[m, n] = ts_tfce[m, n] + cluster_sizes[m, n]**0.5 * threshold**2
+        
+        return ts_tfce
+    
+    positive_thresholds = np.arange(0, np.max(ts) + 0.05, 0.05)
+    negative_thresholds = np.arange(np.min(ts), 0.00 + 0.05, 0.05)
+    positive_ts_tfce = one_sided_tfce(ts, positive_thresholds, np.greater)
+    negative_ts_tfce = one_sided_tfce(ts, negative_thresholds, np.less)
+    ts_tfce = positive_ts_tfce + negative_ts_tfce
+    
+    return ts_tfce
+
 def duration_to_samples(duration_s, sample_rate_Hz):
     return int(duration_s * sample_rate_Hz) + 1
 
