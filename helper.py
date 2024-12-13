@@ -109,6 +109,8 @@ def get_eeg(dfrow, events, start, end, simulation_tag=None):
     Returns:
         eeg : ptsa.data.TimeSeries
             EEG clip.
+        numpy.array
+            List of boolean variables indicating whether the event was a successful memory event (True) or an unsuccessful memory event (False).
     '''
     
     sub, exp, sess, loc, mon = dfrow[['sub', 'exp', 'sess', 'loc', 'mon']]
@@ -471,46 +473,46 @@ def regionalize_electrodes(pairs, localization):
     regionalizations['hemisphere'] = regionalizations.apply(lambda r: get_hemisphere_region_label(r), axis=1)
     return (regionalizations['hemisphere'] + ' ' + regionalizations['region']).values
 
-def exclude_regionalizations(dfrow, pairs, regionalizations):
+# def exclude_regionalizations(dfrow, pairs, regionalizations):
     
-    '''
-    Excludes certain channels from the regionalizations of certain sessions when the EEG data for those channels won't load.
+#     '''
+#     Excludes certain channels from the regionalizations of certain sessions when the EEG data for those channels won't load.
     
-    Parameters:
-        dfrow : pandas.Series
-            Session label.
-        pairs : pandas.DataFrame
-            Bipolar electrode pairs data.
-        regionalizations : array_like
-            List of each channel's regionalization, in order of the channels. 
+#     Parameters:
+#         dfrow : pandas.Series
+#             Session label.
+#         pairs : pandas.DataFrame
+#             Bipolar electrode pairs data.
+#         regionalizations : numpy.array
+#             List of each channel's regionalization, in order of the channels. 
 
-    Returns:
-        regionalizations : array_like
-            List of each channel's regionalization, in order of the channels, with all necessary exclusions made.
-    '''
+#     Returns:
+#         regionalizations : numpy.array
+#             List of each channel's regionalization, in order of the channels, with all necessary exclusions made.
+#     '''
     
-    missing_channels = None
+#     missing_channels = None
     
-    if tuple(dfrow) in [('R1394E', 'FR1', 0, 0, 0)]:
-        missing_channels = ['3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
+#     if tuple(dfrow) in [('R1394E', 'FR1', 0, 0, 0)]:
+#         missing_channels = ['3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
     
-    if tuple(dfrow) in [('R1394E', 'FR1', 1, 1, 1),
-                        ('R1394E', 'catFR1', 1, 1, 1), 
-                        ('R1394E', 'catFR1', 2, 1, 1)]:
-        missing_channels = ['35Ld2-35Ld3', '35Ld4-35Ld5', '35Ld6-35Ld7', '35Ld8-35Ld9', '3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
+#     if tuple(dfrow) in [('R1394E', 'FR1', 1, 1, 1),
+#                         ('R1394E', 'catFR1', 1, 1, 1), 
+#                         ('R1394E', 'catFR1', 2, 1, 1)]:
+#         missing_channels = ['35Ld2-35Ld3', '35Ld4-35Ld5', '35Ld6-35Ld7', '35Ld8-35Ld9', '3Ld10-3Ld11', '3Ld12-3Ld13', '3Ld14-3Ld1']
         
-    if tuple(dfrow) in  [('R1354E', 'FR1', 0, 0, 0),
-                         ('R1354E', 'FR1', 1, 0, 0),
-                         ('R1354E', 'catFR1', 0, 0, 0),
-                         ('R1354E', 'catFR1', 1, 0, 0),
-                         ('R1354E', 'catFR1', 2, 0, 0),
-                         ('R1354E', 'catFR1', 3, 0, 0)]:
-        missing_channels = '5Ldm1-5Ldm2', '5Ldm2-5Ldm3', '5Ldm3-5Ldm4', '5Ldm4-5Ldm5', '5Ldm5-5Ldm6', '5Ldm6-5Ldm7', '5Ldm7-5Ldm8', '5Ldm8-5Ldm9', '5Ldm9-5Ldm1', '25Ldm1-25Ldm2', '25Ldm2-25Ldm3', '25Ldm3-25Ldm4', '25Ldm4-25Ldm5', '25Ldm5-25Ldm6', '25Ldm6-25Ldm7', '25Ldm7-25Ldm8', '25Ldm8-25Ldm9', '25Ldm9-25Ldm1'
+#     if tuple(dfrow) in  [('R1354E', 'FR1', 0, 0, 0),
+#                          ('R1354E', 'FR1', 1, 0, 0),
+#                          ('R1354E', 'catFR1', 0, 0, 0),
+#                          ('R1354E', 'catFR1', 1, 0, 0),
+#                          ('R1354E', 'catFR1', 2, 0, 0),
+#                          ('R1354E', 'catFR1', 3, 0, 0)]:
+#         missing_channels = '5Ldm1-5Ldm2', '5Ldm2-5Ldm3', '5Ldm3-5Ldm4', '5Ldm4-5Ldm5', '5Ldm5-5Ldm6', '5Ldm6-5Ldm7', '5Ldm7-5Ldm8', '5Ldm8-5Ldm9', '5Ldm9-5Ldm1', '25Ldm1-25Ldm2', '25Ldm2-25Ldm3', '25Ldm3-25Ldm4', '25Ldm4-25Ldm5', '25Ldm5-25Ldm6', '25Ldm6-25Ldm7', '25Ldm7-25Ldm8', '25Ldm8-25Ldm9', '25Ldm9-25Ldm1'
     
-    if missing_channels is not None:
-        regionalizations = regionalizations[np.asarray([idx for idx in np.arange(len(pairs)) 
-                                                    if pairs.iloc[idx]['label'] not in missing_channels])]
-    return regionalizations
+#     if missing_channels is not None:
+#         regionalizations = regionalizations[np.asarray([idx for idx in np.arange(len(pairs)) 
+#                                                     if pairs.iloc[idx]['label'] not in missing_channels])]
+#     return regionalizations
 
 def timebin_phase_timeseries(timeseries, sr): return timebin_timeseries(timeseries, sr, circ_mean)
     
@@ -821,7 +823,7 @@ def run_pipeline(dfrow, beh, events, save_dir, simulation_tag=None):
     '''
     
     freqs = np.arange(3, 9)
-    if ex(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc')): return
+    if ex(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.pkl')): return
     
     elsymx = get_elsymx(dfrow, freqs, events, simulation_tag=simulation_tag)
     np.save(join(save_dir, 'elsymxs', f'{ftag(dfrow)}_elsymx.npy'), elsymx)
@@ -829,11 +831,10 @@ def run_pipeline(dfrow, beh, events, save_dir, simulation_tag=None):
     pairs = get_pairs(dfrow)
     localization = get_localization(dfrow)
     regionalizations = regionalize_electrodes(pairs, localization)
-    regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
      
     elsymx_regs = add_regions_elsymx(elsymx, regionalizations, freqs, beh)
     regsymx = regionalize_electrode_connectivities(elsymx_regs)
-    regsymx.to_netcdf(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.nc'))
+    save_pickle(join(save_dir, 'regsymxs', f'{ftag(dfrow)}_regsymx.pkl'), regsymx)
     return regsymx
     
 def cohens_d(x, y):
@@ -985,7 +986,7 @@ def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=N
         None
     '''
     
-    if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.nc')): return
+    if ex(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx.pkl')): return
 
     band_name_to_freqs = {'theta': np.arange(3, 9),
                           'gamma': np.arange(45, 100, 5)}
@@ -996,7 +997,7 @@ def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=N
     pairs = get_pairs(dfrow)
     localization = get_localization(dfrow)
     regionalizations = regionalize_electrodes(pairs, localization)
-    regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
+#     regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
     
     regpomx = pd.Series({})
     for k in ['t', 'd']: 
@@ -1004,7 +1005,7 @@ def run_pipeline_power(dfrow, band_name, beh, events, save_dir, simulation_tag=N
         regpomx[k] = regionalize_electrode_powers(elpomx_regs)
 
         np.save(join(save_dir, 'elpomxs', band_name, f'{ftag(dfrow)}_elpomx{k}.npy'), elpomx[k])
-        regpomx[k].to_netcdf(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx{k}.nc'))
+        save_pickle(join(save_dir, 'regpomxs', band_name, f'{ftag(dfrow)}_regpomx{k}.pkl'), regpomx[k])
 
 
 def replace_w_simulated_EEG(original_eeg,
@@ -1057,7 +1058,7 @@ def replace_w_simulated_EEG(original_eeg,
         
         localization = get_localization(dfrow)
         regionalizations = regionalize_electrodes(pairs, localization)
-        regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
+#         regionalizations = exclude_regionalizations(dfrow, pairs, regionalizations)
         region_series = pd.Series(regionalizations)
         has_hemisphere_mask = region_series.str.startswith('L ') | region_series.str.startswith('R ') | region_series.isna()
         if not has_hemisphere_mask.all():

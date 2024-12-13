@@ -13,13 +13,7 @@ ___TIPS___
 
 - WholeBrainConnectivityPPCRevision.ipynb contains all the cells needed to create the directory structure within the root directory that the pipeline requires to run. It also contains cells that delete these directories and their files. To avoid inadvertent deletions, it is recommended that you leave the code that deletes files and directories commented out when not in use.
 
-- The "Get behavioral events" section must be run in the workshop_311 environment, unlike the rest of the notebook. More details are provided at the beginning of that section.
-
-- We were not able to reconstruct the workshop or the workshop_311 environments from their YAML files. However, you can see in those files what packages and package versions we used and create new environments accordingly.
-
-- xarray DataArrays are used for labeled arrays. The native method to save them for long-term usage is xarray.DataArray.to_netcdf(). While this method was indeed used in the notebook, it seems pretty problematic. THis method sometimes threw the error "ValueError: No global client found and no address provided for nan values" and failed. Other times, it appeared to work in saving out the xarray.DataArray but the saved .nc file could not subsequently be loaded with xarray.opendataarray(). And yet other times, both xarray.DataArray.to_netcdf() and xarray.opendataarray() executed without error, but the loaded xarray.DataArray contained NaN values in entries that should not have had NaN values, seemingly at random. 
-
-Therefore, we recommend to future users of this codebase that the lines using xarray.DataArray.to_netcdf() and xarray.open_dataarray be replaced with pickling (see the load_pickle and save_pickle functions in misc.py) unless it can be determined that the xarray methods work reliably.
+- The workshop_311 environment is used for the entire notebook. However, we were not able to reconstruct the workshop_311 environment from the its YAML file, which we have provided in this repository. However, you can see in the YAML file what packages and package versions we used and create new environments accordingly.
 
 ___ABBREVIATIONS___
 
@@ -39,8 +33,8 @@ ri: retrieval/intrusion. That is, the behavioral contrast between correct recall
 
 elsymx: electrode-by-electrode synchrony effects matrix
 regsymx: electrode-by-electrode synchrony effects matrix
-elpomx: electrode-wise power effects (Cohen's d between behavioral memory conditions) matrix
-regpomx: region-wise power effects (Cohen's d between behavioral memory conditions) matrix
+elpomx: electrode-wise power effects matrix
+regpomx: region-wise power effects matrix
 
 ___DESCRIPTION OF FILES___
 
