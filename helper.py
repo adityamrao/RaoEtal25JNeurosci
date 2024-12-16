@@ -45,7 +45,7 @@ from cstat import * #circular statistics
 from misc import * #helper functions for loading and saving data, and for other purposes
 from matrix_operations import * #matrix operations
 import os
-from simulate_eeg import AVAILABLE_SIMULATIONS, simulation_parameters, sample_eeg
+from simulate_eeg import AVAILABLE_SIMULATIONS, NULL_SIMULATION_TAGS, simulation_parameters, sample_eeg
 
 
 beh_to_event_windows = {'en': [250-1000, 1250+1000],
@@ -57,6 +57,10 @@ beh_to_epochs = {'en': np.arange(250, 1250, 200),
               'en_all': np.arange(250, 1250, 200),
               'rm': np.arange(-1000, 0, 200),
               'ri': np.arange(-1000, 0, 200)}
+
+behavioral_names = {'en': 'Encoding',
+                    'rm': 'Retrieval',
+                    'ri': 'Retrieval-Accuracy'}
 
 # root_dir set in main analysis notebook
 def print_root_dir():
@@ -1099,10 +1103,18 @@ def replace_w_simulated_EEG(original_eeg,
                                 pinknoise_amplitude=pinknoise_amplitude,
                                 pinknoise_exponent=pinknoise_exponent,
     )
-    simulated_eeg0 = simulated_eeg0.assign_coords(event=eeg0.event)
-    simulated_eeg1 = simulated_eeg1.assign_coords(event=eeg1.event)
-    simulated_eeg0 = simulated_eeg0.assign_coords(channel=eeg0.channel)
-    simulated_eeg1 = simulated_eeg1.assign_coords(channel=eeg1.channel)
+    simulated_eeg0 = TimeSeries.create(data=simulated_eeg0.values,
+                                       coords={'event': eeg0.coords['event'],
+                                               'channel': eeg0.coords['channel'],
+                                               'time': simulated_eeg0.coords['time']},
+                                       dims=simulated_eeg0.dims,
+                                       samplerate=simulated_eeg0.samplerate.item())
+    simulated_eeg1 = TimeSeries.create(data=simulated_eeg1.values,
+                                       coords={'event': eeg1.coords['event'],
+                                               'channel': eeg1.coords['channel'],
+                                               'time': simulated_eeg1.coords['time']},
+                                       dims=simulated_eeg1.dims,
+                                       samplerate=simulated_eeg1.samplerate.item())
     
     del eeg0, eeg1
     from matrix_operations import sort_multi_index_coord
@@ -1114,7 +1126,30 @@ def replace_w_simulated_EEG(original_eeg,
     simulated_eeg = sort_multi_index_coord(simulated_eeg, 'event', '_index')
     simulated_eeg = simulated_eeg.reset_index('_index', drop=True)
     simulated_eeg.attrs['samplerate'] = original_eeg.samplerate
-    assert original_eeg.event.equals(simulated_eeg.event)
+    
+    # n_evs = 0
+    # for i_ev, (sim_ev, orig_ev) in enumerate(zip(simulated_eeg.event, original_eeg.event)):
+    #     if not sim_ev.equals(orig_ev):
+    #         print(i_ev)
+    #         print(sim_ev)
+    #         print()
+    #         print(orig_ev)
+    #         print()
+    #         print('sim_ev == sim_ev', sim_ev.equals(sim_ev))
+    #         print('orig_ev == orig_ev', orig_ev.equals(orig_ev))
+    #         print()
+    #         print()
+    #         n_evs += 1
+    #         if n_evs == 5:
+    #             break
+    
+    # print(original_eeg.event)
+    # print(simulated_eeg.event)
+    # print(original_eeg.item_name)
+    # print(simulated_eeg.item_name)
+    
+    # matches for most sessions, but some get implicitly type cast by xarray in workshop_311 environment
+    # assert original_eeg.event.equals(simulated_eeg.event)
     assert original_eeg.channel.equals(simulated_eeg.channel)
     assert original_eeg.samplerate.equals(simulated_eeg.samplerate)
     if 'samplerate' in original_eeg.attrs:
@@ -1123,13 +1158,255 @@ def replace_w_simulated_EEG(original_eeg,
     if time_unit == 'second':
         simulated_eeg = simulated_eeg.assign_coords({'time': simulated_eeg['time'] / 1000})
 
-    # print('simulated_eeg at the end of replace_w_simulated_eeg():')
-    # display(simulated_eeg.coords)
-    # display(simulated_eeg.dims)
-    # display(simulated_eeg.shape)
-    # display(len(simulated_eeg))
-    
     # attributes match for EEG loaded with cmlreaders but EEG loaded with PTSA has different attributes that appear to not matter
     # assert original_eeg.attrs == simulated_eeg.attrs, f'Attributes of simulated EEG do not match original. '
     #         f'Original attributes:\n{original_eeg.attrs}\n\nReplacement attributes:\n{simulated_eeg.attrs}'
     return simulated_eeg
+
+
+from matrix_operations import sort_array_across_order, upper_tri_values
+from misc import print_ttest_1samp
+
+def plot_ppc_matrix(ppc_matrix, beh, regions=None, subplot_col_num=None):
+    if subplot_col_num is None:
+        plt.figure(figsize=(4, 2))
+        subplot_col_num = 1
+    plt.subplot(2, 3, subplot_col_num)
+    plt.imshow(ppc_matrix)
+    plt.xlabel('Region', fontsize=30)
+    plt.ylabel('Region', fontsize=30)
+    plt.xticks([])
+    plt.yticks([])
+    cbar = plt.colorbar(shrink=0.75)
+    cbar.set_label('PPC Difference', fontsize=30)
+    cbar.ax.tick_params(labelsize=20)
+    behavioral_name = behavioral_names[beh]
+    plt.title(f'{behavioral_name}', fontsize=35)
+    
+    plt.subplot(2, 3, subplot_col_num + 3)
+    plt.hist(ppc_matrix.values.reshape(-1), bins=100)
+    plt.xticks(fontsize=25, rotation=45)
+    plt.yticks(fontsize=25)
+    plt.xlabel('PPC Difference', fontsize=30)
+    plt.ylabel('Region-Region Combination Count', fontsize=30)
+    plt.title(f'{behavioral_name}', fontsize=35)
+    plt.suptitle(f'Regional PPC Differences', fontsize=40)
+
+    if regions:
+        ppc_matrix_sorted = sort_array_across_order(ppc_matrix, regions, axis=[0, 1])
+        plt.figure(figsize=(2, 2))
+        plt.imshow(ppc_matrix_sorted)
+        cbar = plt.colorbar()
+        cbar.set_label('PPC Difference', fontsize=20)
+        cbar.ax.tick_params(labelsize=20)
+        plt.title(behavioral_name, fontsize=30)
+        plt.suptitle('PPC Matrix Sorted by Region', fontsize=35)
+
+
+def generate_subject_synchrony_results(root_dir, simulation_tag=None, figure_path=''):
+    subplot_col_num = 1
+    is_simulation = simulation_tag not in ['', 'standard', None]
+    plt.figure(1, figsize=(30, 20))
+    for i_beh, beh in enumerate(['en', 'rm', 'ri']):
+        fname = join(root_dir, f'{beh}_pop_symx.pkl')
+        mx = load_pickle(fname)
+
+        mx0 = mx.sel(success=False)
+        mx1 = mx.sel(success=True)
+        diffs = (mx1 - mx0).mean(['freq', 'epoch', 'sub'])
+        mx0_sub = mx0.mean(['freq', 'epoch', 'reg1', 'reg2'])
+        mx1_sub = mx1.mean(['freq', 'epoch', 'reg1', 'reg2'])
+        sub_diffs = mx1_sub - mx0_sub
+
+        regions = None
+        behavioral_name = behavioral_names[beh]
+        print(f'---------------- {behavioral_name} ----------------')
+        print(f'Averaged across frequencies:')
+        print(f'Mean {behavioral_name} PPC (averaged across subjects before regions): {np.nanmean(diffs.values):0.5}')
+        print(f'Mean {behavioral_name} PPC (averaged across regions before subjects): {np.nanmean(sub_diffs.values):0.5}')
+        print_ttest_1samp(sub_diffs.values)
+        plt.figure(2, figsize=(30, 10))
+        plt.subplot(1, 3, i_beh + 1)
+        plt.hist(sub_diffs.values, bins=40)
+        plt.title(f'{behavioral_name}', fontsize=35)
+        plt.xlabel('PPC Difference', fontsize=30)
+        plt.ylabel('Subject Count', fontsize=30)
+        plt.xticks(fontsize=25)
+        plt.yticks(fontsize=25)
+        plt.suptitle(f'Subject-level Brain-wide Synchrony', fontsize=40)
+
+        if is_simulation:
+            params = simulation_parameters[simulation_tag]
+            oscillation_frequency = params['oscillation_frequency']
+            # plot_ppc_matrix(mx0, regions=regions, beh=beh, subplot_col_num=subplot_col_num)
+            # plt.title(f'PPC matrix for unsuccessful {beh} trials at {oscillation_frequency} Hz')
+            # plot_ppc_matrix(mx1, regions=regions, beh=beh, subplot_col_num=subplot_col_num)
+            # plt.title(f'PPC matrix for successful {beh} trials at {oscillation_frequency} Hz')
+            mx0_freq = mx.sel(freq=oscillation_frequency, success=False)
+            mx1_freq = mx.sel(freq=oscillation_frequency, success=True)
+            diffs_freq = (mx1_freq - mx0_freq).mean(['epoch', 'sub'])
+            mx0_sub_freq = mx0_freq.mean(['epoch', 'reg1', 'reg2'])
+            mx1_sub_freq = mx1_freq.mean(['epoch', 'reg1', 'reg2'])
+            sub_diffs_freq = mx1_sub_freq - mx0_sub_freq
+
+            print(f'Measured at {oscillation_frequency} Hz:')
+            print(f'Mean {behavioral_name} PPC (averaged across subjects before regions): {np.nanmean(diffs_freq.values):0.5}')
+            print(f'Mean {behavioral_name} PPC (averaged across regions before subjects): {np.nanmean(sub_diffs_freq.values):0.5}')
+            print_ttest_1samp(sub_diffs_freq.values)
+            print()
+            plt.figure(3, figsize=(30, 10))
+            plt.subplot(1, 3, i_beh + 1)
+            plt.hist(sub_diffs_freq.values, bins=40)
+            plt.title(f'{behavioral_name}', fontsize=25)
+            plt.xlabel('PPC Difference', fontsize=25)
+            plt.ylabel('Subject Count', fontsize=25)
+            plt.suptitle(f'Subject-level Brain-wide Synchrony at {oscillation_frequency} Hz', fontsize=25)
+
+        plt.figure(1)
+        plot_ppc_matrix(diffs, regions=regions, beh=beh, subplot_col_num=subplot_col_num)
+        subplot_col_num += 1
+
+    title = 'PPC Matrices for Oscillations'
+    if is_simulation:
+        title = title + f' at {oscillation_frequency} Hz'
+    plt.suptitle(title, fontsize=35, y=0.9)
+    plt.savefig(os.path.join(figure_path, f'ppc_matrices' + (f'_{oscillation_frequency}Hz_{simulation_tag}' if is_simulation else '') + '.png'))
+    
+    # # find regions missing across all subjects
+    # missing_region_mask = np.isnan(mx0.values).all(axis=(0, 2, 3, 4))
+    # missing_regions = mx0.reg1[missing_region_mask]
+    # print(missing_regions)
+
+
+    
+def generate_simulation_theoretical_effect_plots(root_dir, simulation_tag, figure_path=''):
+    parameters = simulation_parameters[simulation_tag]
+    is_simulation = simulation_tag not in ['', 'standard', None]
+    oscillation_frequency = parameters['oscillation_frequency']
+    if simulation_tag in NULL_SIMULATION_TAGS:
+        n_regions = 80
+        ppc_matrix = np.zeros((n_regions, n_regions))
+    else:
+        from simulate_eeg import get_block_diagonal_ppc_matrix
+
+        verbose = False
+        ppc_matrix0 = get_block_diagonal_ppc_matrix(n_channels=80,
+                                                    n_regions=80,
+                                                    n_region_groups=2,
+                                                    regions=None,
+                                                    region_groups=None,
+                                                    global_ppc=parameters['global_ppc0'],
+                                                    within_group_ppc=parameters['within_group_ppc0'],
+                                                    within_region_ppc=parameters['within_region_ppc0'],
+                                                    verbose=verbose,
+                                                   )
+        ppc_matrix1 = get_block_diagonal_ppc_matrix(n_channels=80,
+                                                    n_regions=80,
+                                                    n_region_groups=2,
+                                                    regions=None,
+                                                    region_groups=None,
+                                                    global_ppc=parameters['global_ppc1'],
+                                                    within_group_ppc=parameters['within_group_ppc1'],
+                                                    within_region_ppc=parameters['within_region_ppc1'],
+                                                    verbose=verbose,
+                                                   )
+
+        ppc_matrix = ppc_matrix1 - ppc_matrix0
+        np.fill_diagonal(ppc_matrix, parameters['within_region_ppc1'] - parameters['within_region_ppc0'])
+
+    from matrix_operations import upper_tri_values
+    print('Average theoretical PPC difference across regions:', upper_tri_values(ppc_matrix).mean())
+
+    plt.figure(figsize=(10, 10))
+    plt.imshow(ppc_matrix)
+    plt.xlabel('Region', fontsize=30)
+    plt.ylabel('Region', fontsize=30)
+    plt.xticks([])
+    plt.yticks([])
+    cbar = plt.colorbar()
+    cbar.set_label('PPC Difference', fontsize=25)
+    cbar.ax.tick_params(labelsize=25)
+    _ = plt.title(f'Theoretical PPC Differences', fontsize=35)
+    plt.savefig(os.path.join(figure_path, f'theoretical_ppc_matrix' + (f'_{oscillation_frequency}Hz_{simulation_tag}' if is_simulation else '') + '.png'))
+    return ppc_matrix
+
+
+def sanity_check_whole_brain_synchrony(theory_ppc_matrix, root_dir, simulation_tag):
+    from matrix_operations import upper_tri_values
+    ppc_matrix = theory_ppc_matrix
+    
+    is_simulation = simulation_tag not in ['', 'standard', None]
+
+    for beh in ['en', 'rm', 'ri']:
+        fname = join(root_dir, f'{beh}_pop_symx.pkl')
+        mx = load_pickle(fname)
+        
+        behavioral_name = behavioral_names[beh]
+
+        mean_nans = list()
+        sub_population_matrices = list()
+        subject_effects_nonredundant = list()
+        for subject, sub_mx in mx.groupby('sub'):
+            # replace synchrony values for missing region-region pairs with NaNs in population PPC matrix
+            nan_idx = np.where(np.isnan(sub_mx[..., 0, 0, 0].values))
+            ppc_matrix_sub = ppc_matrix.copy()
+            ppc_matrix_sub[nan_idx] = np.nan
+            sub_population_matrices.append(ppc_matrix_sub)
+            mean_nans.append(np.isnan(ppc_matrix_sub).mean())
+            subject_effects_nonredundant.append(np.nanmean(upper_tri_values(ppc_matrix_sub)))
+        population_ppcs = np.stack(sub_population_matrices, axis=0)
+        # subjects x regions x regions
+        theoretical_global_synchrony = np.nanmean(np.nanmean(np.nanmean(population_ppcs, axis=-1), axis=-1), axis=0)
+        print(f'---------------- {behavioral_name} ----------------')
+        print(f'Theoretical global synchrony effect: {theoretical_global_synchrony:0.5}')
+        print(f'Theoretical global synchrony effect with non-redundant region-region combinations: {np.mean(subject_effects_nonredundant):0.5}')
+        proportion_nan = np.mean(mean_nans)
+        print(f'Proportion of total region-region pairs missing at subject level: {proportion_nan:0.5}')
+        print()
+
+def plot_synchrony_frequency_epochs(root_dir, simulation_tag=None, figure_path=''):
+    plt.figure(figsize=(30, 10))
+    is_simulation = simulation_tag not in ['', 'standard', None]
+    if is_simulation:
+        parameters = simulation_parameters[simulation_tag]
+        oscillation_frequency = parameters['oscillation_frequency']
+
+    for i_beh, beh in enumerate(['en', 'rm', 'ri']):
+        behavioral_name = behavioral_names[beh]
+
+        fname = join(root_dir, f'{beh}_pop_symx.pkl')
+        mx = load_pickle(fname)
+        freq_epoch_mx = mx[0, 0, 0, ..., 0] * np.nan
+        for frequency, freq_mx in mx.groupby('freq'):
+            for epoch, subset_mx in freq_mx.groupby('epoch'):
+                subset_mx = subset_mx.mean('reg2').mean('reg1')
+                mean_effect = (subset_mx.sel(success=True).data - subset_mx.sel(success=False).data).mean()
+                freq_epoch_mx.loc[dict(freq=frequency, epoch=epoch)] = mean_effect
+        plt.subplot(1, 3, i_beh + 1)
+        plt.imshow(freq_epoch_mx)
+        plt.suptitle(f'Whole-brain Synchrony by Frequency and Epoch', fontsize=40)
+        plt.title(f'{behavioral_name}', fontsize=35)
+        plt.xticks(np.arange(freq_epoch_mx.shape[1]), freq_epoch_mx.epoch.values, fontsize=25)
+        plt.yticks(np.arange(freq_epoch_mx.shape[0]), freq_epoch_mx.freq.values, fontsize=25)
+        plt.xlabel('Epoch Start Time (ms)', fontsize=25)
+        plt.ylabel('Frequency (Hz)', fontsize=25)
+        cbar = plt.colorbar()
+        cbar.set_label('PPC Difference', fontsize=20)
+        cbar.ax.tick_params(labelsize=20)
+
+    plt.savefig(os.path.join(figure_path, f'ppc_freq_epoch' + (f'_{oscillation_frequency}Hz_oscillation_{simulation_tag}' if is_simulation else '') + '.png'))
+
+
+def sanity_check_simulated_synchrony(parameters):
+    diagonal_diff = parameters['within_region_ppc1'] - parameters['within_region_ppc0']
+    offdiagonal_diff = parameters['global_ppc1'] - parameters['global_ppc0']
+
+    # average proportion of region-region combinations missing across subjects
+    proportion_region_combo_missing = 0.95
+    n_regions = 80 * np.sqrt(1 - proportion_region_combo_missing)
+    n_upper_tri_strict = (n_regions ** 2 - n_regions) / 2
+    n_upper_tri = n_upper_tri_strict + n_regions
+    pop_global_synchrony_upper_tri = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict) / n_upper_tri
+    pop_global_synchrony_all_regions = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict * 2) / (n_regions ** 2)
+    print(f'Population global synchrony averaged over region-region pairs including redundant off-diagonal elements:\n{pop_global_synchrony_all_regions:0.5}')
+    print(f'Population global synchrony averaged over region-region pairs NOT including redundant off-diagonal elements:\n{pop_global_synchrony_upper_tri:0.5}')

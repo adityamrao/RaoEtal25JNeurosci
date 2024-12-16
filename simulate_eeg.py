@@ -87,6 +87,8 @@ simulation_parameters = {
 }
 
 AVAILABLE_SIMULATIONS = list(simulation_parameters.keys())
+NULL_SIMULATION_TAGS = ['null_connectivity', 'equal_oscillation_null']
+
 
 # AVAILABLE_SIMULATIONS = [
 #             'standard', '', None,  # use empirical EEG (no simulation)
