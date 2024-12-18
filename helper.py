@@ -1166,13 +1166,23 @@ def replace_w_simulated_EEG(original_eeg,
 
 from matrix_operations import sort_array_across_order, upper_tri_values
 from misc import print_ttest_1samp
+from matplotlib.colors import SymLogNorm
 
-def plot_ppc_matrix(ppc_matrix, beh, regions=None, subplot_col_num=None):
+def plot_ppc_matrix(ppc_matrix, beh, regions=None, subplot_col_num=None, linthresh=None):
     if subplot_col_num is None:
         plt.figure(figsize=(4, 2))
         subplot_col_num = 1
     plt.subplot(2, 3, subplot_col_num)
-    plt.imshow(ppc_matrix)
+    if linthresh is not None:
+        color_norm = SymLogNorm(linthresh=linthresh,
+                                vmin=np.nanpercentile(ppc_matrix, 5),
+                                vmax=np.nanpercentile(ppc_matrix, 95)
+                                # vmin=np.nanmin(ppc_matrix),
+                                # vmax=np.nanmax(ppc_matrix)
+                               )
+    else:
+        color_norm = None
+    plt.imshow(ppc_matrix, norm=color_norm)
     plt.xlabel('Region', fontsize=30)
     plt.ylabel('Region', fontsize=30)
     plt.xticks([])
@@ -1237,6 +1247,18 @@ def generate_subject_synchrony_results(root_dir, simulation_tag=None, figure_pat
 
         if is_simulation:
             params = simulation_parameters[simulation_tag]
+            linthresh = None
+            
+            # deprecated. SymLogNorm did not substantially improve interpretability
+            # if simulation_tag in NULL_SIMULATION_TAGS:
+            #     linthresh = None
+            # else:
+            #     # linear threshold for matplotlib.colors.SymLogNorm color normalization
+            #     linthresh = np.min([np.abs(params['global_ppc1'] - params['global_ppc0']),
+            #                         np.abs(params['within_group_ppc1'] - params['within_group_ppc0']),
+            #                         np.abs(params['within_region_ppc1'] - params['within_region_ppc0']),
+            #                        ])
+            #     linthresh = np.max([linthresh, 0.0005])
             oscillation_frequency = params['oscillation_frequency']
             # plot_ppc_matrix(mx0, regions=regions, beh=beh, subplot_col_num=subplot_col_num)
             # plt.title(f'PPC matrix for unsuccessful {beh} trials at {oscillation_frequency} Hz')
@@ -1261,9 +1283,11 @@ def generate_subject_synchrony_results(root_dir, simulation_tag=None, figure_pat
             plt.xlabel('PPC Difference', fontsize=25)
             plt.ylabel('Subject Count', fontsize=25)
             plt.suptitle(f'Subject-level Brain-wide Synchrony at {oscillation_frequency} Hz', fontsize=25)
+        else:
+            linthresh = None
 
         plt.figure(1)
-        plot_ppc_matrix(diffs, regions=regions, beh=beh, subplot_col_num=subplot_col_num)
+        plot_ppc_matrix(diffs, regions=regions, beh=beh, subplot_col_num=subplot_col_num, linthresh=linthresh)
         subplot_col_num += 1
 
     title = 'PPC Matrices for Oscillations'
@@ -1336,6 +1360,8 @@ def sanity_check_whole_brain_synchrony(theory_ppc_matrix, root_dir, simulation_t
     ppc_matrix = theory_ppc_matrix
     
     is_simulation = simulation_tag not in ['', 'standard', None]
+    
+    theoretical_effects = dict()
 
     for beh in ['en', 'rm', 'ri']:
         fname = join(root_dir, f'{beh}_pop_symx.pkl')
@@ -1357,12 +1383,16 @@ def sanity_check_whole_brain_synchrony(theory_ppc_matrix, root_dir, simulation_t
         population_ppcs = np.stack(sub_population_matrices, axis=0)
         # subjects x regions x regions
         theoretical_global_synchrony = np.nanmean(np.nanmean(np.nanmean(population_ppcs, axis=-1), axis=-1), axis=0)
+        theoretical_effects[beh] = theoretical_global_synchrony
         print(f'---------------- {behavioral_name} ----------------')
         print(f'Theoretical global synchrony effect: {theoretical_global_synchrony:0.5}')
         print(f'Theoretical global synchrony effect with non-redundant region-region combinations: {np.mean(subject_effects_nonredundant):0.5}')
         proportion_nan = np.mean(mean_nans)
         print(f'Proportion of total region-region pairs missing at subject level: {proportion_nan:0.5}')
         print()
+        
+    return theoretical_effects
+
 
 def plot_synchrony_frequency_epochs(root_dir, simulation_tag=None, figure_path=''):
     plt.figure(figsize=(30, 10))
@@ -1397,16 +1427,16 @@ def plot_synchrony_frequency_epochs(root_dir, simulation_tag=None, figure_path='
     plt.savefig(os.path.join(figure_path, f'ppc_freq_epoch' + (f'_{oscillation_frequency}Hz_oscillation_{simulation_tag}' if is_simulation else '') + '.png'))
 
 
-def sanity_check_simulated_synchrony(parameters):
-    diagonal_diff = parameters['within_region_ppc1'] - parameters['within_region_ppc0']
-    offdiagonal_diff = parameters['global_ppc1'] - parameters['global_ppc0']
+# def sanity_check_simulated_synchrony(parameters):
+#     diagonal_diff = parameters['within_region_ppc1'] - parameters['within_region_ppc0']
+#     offdiagonal_diff = parameters['global_ppc1'] - parameters['global_ppc0']
 
-    # average proportion of region-region combinations missing across subjects
-    proportion_region_combo_missing = 0.95
-    n_regions = 80 * np.sqrt(1 - proportion_region_combo_missing)
-    n_upper_tri_strict = (n_regions ** 2 - n_regions) / 2
-    n_upper_tri = n_upper_tri_strict + n_regions
-    pop_global_synchrony_upper_tri = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict) / n_upper_tri
-    pop_global_synchrony_all_regions = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict * 2) / (n_regions ** 2)
-    print(f'Population global synchrony averaged over region-region pairs including redundant off-diagonal elements:\n{pop_global_synchrony_all_regions:0.5}')
-    print(f'Population global synchrony averaged over region-region pairs NOT including redundant off-diagonal elements:\n{pop_global_synchrony_upper_tri:0.5}')
+#     # average proportion of region-region combinations missing across subjects
+#     proportion_region_combo_missing = 0.95
+#     n_regions = 80 * np.sqrt(1 - proportion_region_combo_missing)
+#     n_upper_tri_strict = (n_regions ** 2 - n_regions) / 2
+#     n_upper_tri = n_upper_tri_strict + n_regions
+#     pop_global_synchrony_upper_tri = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict) / n_upper_tri
+#     pop_global_synchrony_all_regions = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict * 2) / (n_regions ** 2)
+#     print(f'Population global synchrony averaged over region-region pairs including redundant off-diagonal elements:\n{pop_global_synchrony_all_regions:0.5}')
+#     print(f'Population global synchrony averaged over region-region pairs NOT including redundant off-diagonal elements:\n{pop_global_synchrony_upper_tri:0.5}')
