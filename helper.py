@@ -60,7 +60,7 @@ beh_to_epochs = {'en': np.arange(250, 1250, 200),
 
 behavioral_names = {'en': 'Encoding',
                     'rm': 'Retrieval',
-                    'ri': 'Retrieval-Accuracy'}
+                    'ri': 'Recall Accuracy'}
 
 # root_dir set in main analysis notebook
 def print_root_dir():
