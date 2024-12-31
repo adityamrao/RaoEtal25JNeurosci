@@ -1440,3 +1440,19 @@ def plot_synchrony_frequency_epochs(root_dir, simulation_tag=None, figure_path='
 #     pop_global_synchrony_all_regions = (diagonal_diff * n_regions + offdiagonal_diff * n_upper_tri_strict * 2) / (n_regions ** 2)
 #     print(f'Population global synchrony averaged over region-region pairs including redundant off-diagonal elements:\n{pop_global_synchrony_all_regions:0.5}')
 #     print(f'Population global synchrony averaged over region-region pairs NOT including redundant off-diagonal elements:\n{pop_global_synchrony_upper_tri:0.5}')
+
+def get_analyzed_channels_mask(dfrow):
+    
+    pairs, localization = get_pairs(dfrow), get_localization(dfrow)
+    regionalizations = regionalize_electrodes(pairs, localization)
+    region_labels = get_region_information('region_labels')
+    standard_regionalizations_mask = np.isin(regionalizations, region_labels)
+    
+    return standard_regionalizations_mask
+
+def drop_channels_from_symx(symx, included_channel_mask):
+    
+    symx = symx[included_channel_mask, ...]
+    symx = symx[:, included_channel_mask, ...]
+    
+    return symx
